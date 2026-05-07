@@ -1484,12 +1484,12 @@
         }
 
         getCardColor(card) {
-            if (!card) return '#333333'; // Changed from #ffffff
+            if (!card) return '#999999'; // Changed from #ffffff
             // If it's a wild card and a color has been chosen, use that color
             if ((card.type === "wild" || card.type === "wild_draw_4") && card.chosenColor) {
                 switch (card.chosenColor) {
-                    case 'red': return '#FF0000';
-                    case 'blue': return '#0000FF';
+                    case 'red': return '#ff0000';
+                    case 'blue': return '#00b3ff';
                     case 'green': return '#00FF00';
                     case 'yellow': return '#FFFF00';
                     default: return '#dfdfdf'; // Default for chosen color if something goes wrong
