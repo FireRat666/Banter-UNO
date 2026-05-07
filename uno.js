@@ -1276,16 +1276,16 @@
             if (this.audioTracker[name] && now - this.audioTracker[name] < 100) return;
             this.audioTracker[name] = now;
 
-            // Placeholder for sound assets. Will need actual URLs.
+            // Sound assets.
             const soundMap = {
-                "join": "https://hah.firer.at/Assets/playerJoin.ogg", // Example
-                "leave": "https://hah.firer.at/Assets/playerKick.ogg",
-                "start": "https://hah.firer.at/Assets/gameStart.ogg",
-                "play_card": "https://hah.firer.at/Assets/card_flick.ogg",
-                "draw_card": "https://hah.firer.at/Assets/card_flick.ogg",
-                "uno": "https://hah.firer.at/Assets/ding%20ding.ogg",
-                "win": "https://hah.firer.at/Assets/fanfare with pop.ogg",
-                "pass": "https://hah.firer.at/Assets/ding%20ding.ogg" // Placeholder for pass sound
+                "join": "https://uno.firer.at/Assets/playerJoin.ogg",
+                "leave": "https://uno.firer.at/Assets/playerKick.ogg",
+                "start": "https://uno.firer.at/Assets/gameStart.ogg",
+                "play_card": "https://uno.firer.at/Assets/card_flick.ogg",
+                "draw_card": "https://uno.firer.at/Assets/card_flick.ogg",
+                "uno": "https://uno.firer.at/Assets/ding%20ding.ogg",
+                "win": "https://uno.firer.at/Assets/fanfare with pop.ogg",
+                "pass": "https://uno.firer.at/Assets/ding%20ding.ogg"
             };
             const url = soundMap[name];
             if (!url) {

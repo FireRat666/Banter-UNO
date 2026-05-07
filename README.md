@@ -48,6 +48,15 @@ To add UNO to your Banter space, simply include the `uno.js` script in your HTML
 </html>
 ```
 
+## Attribution
+
+This UNO game is based on previous works:
+*   **Original "Holograms Against Humanity" (AltspaceVR adaptation):** Derogatory, falkrons, schmidtec
+*   **Ported to Banter:** Shane
+*   **improved, Fixed and ported from A-Frame:** FireRat
+
+The sound assets used in this project are derived from the original "Holograms Against Humanity" project.
+
 ## How it works
 
 The game uses the Banter SDK to create game objects, UI elements, and manage network state.
