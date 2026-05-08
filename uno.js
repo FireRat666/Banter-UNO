@@ -454,7 +454,8 @@
 
         async buildCentralUI() {
             const centralObj = await new BS.GameObject({ name: "UNO_CentralUI", parent: this.root, localPosition: new BS.Vector3(0, 2.0, 0), localScale: new BS.Vector3(0.15, 0.15, 0.15) }).Async();
-            await centralObj.AddComponent(new BS.BanterBillboard({ enableXAxis: true, enableYAxis: true }));
+            let centralBillboardObj = await centralObj.AddComponent(new BS.BanterBillboard({ smoothing: 1, enableXAxis: false, enableYAxis: true }));
+            centralBillboardObj.enableXAxis = false;
 
             const panel = await centralObj.AddComponent(new BS.BanterUI(new BS.Vector2(900, 1000), false));
             const rootEl = panel.CreateVisualElement();
