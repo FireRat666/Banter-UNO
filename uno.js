@@ -4,7 +4,7 @@
 
     const MAX_PLAYERS = 10; // Uno typically 2-10 players
     const MAX_HAND_CARDS = 20; // Uno can have many cards in hand
-    const STATE_KEY = "uno_game_state"; // Key for BanterSpace state
+    let STATE_KEY = "uno_game_state"; // Key for BanterSpace state
     const TURN_DURATION = 90 * 1000; // 900 seconds in milliseconds
     const DISCONNECT_TIMEOUT_MS = 45000; // 45 seconds grace period
 
@@ -34,9 +34,9 @@
                 position: getParam("position", "0 0 0"),
                 rotation: getParam("rotation", "0 0 0"),
                 instance: getParam("instance", "demo-uno"), // Unique instance for Uno
-                debug: getParam("debug", "false") === "true",
-                oneForEachInstance: getParam("one-for-each-instance", "false") === "true"
+                debug: getParam("debug", "false") === "true"
             };
+            STATE_KEY = this.params.instance;
         }
 
         wrapText(text, maxChars = 19) {
@@ -86,11 +86,6 @@
                     scene.On("unity-loaded", resolve);
                     window.addEventListener("unity-loaded", resolve, { once: true });
                 });
-            }
-
-            // Now that Unity is loaded, scene.localUser and scene.space should be available.
-            if (this.params.oneForEachInstance && scene.localUser?.instance) {
-                this.params.instance += scene.localUser.instance;
             }
 
             this.log("Initializing Uno Game...");
