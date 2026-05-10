@@ -528,7 +528,7 @@
 
             this.ui.joinBtn = await createBtn(buttonsRow, "JOIN GAME", "#2196F3", () => this.sendAction("join-game"));
             this.ui.dealBtn = await createBtn(buttonsRow, "START GAME", "#4CAF50", () => this.sendAction("start-game"));
-            this.ui.leaveBtn = await createBtn(buttonsRow, "LEAVE GAME", "#F44336", () => this.confirm("Leave game?", () => this.sendAction("leave-game")));
+            this.ui.leaveBtn = await createBtn(buttonsRow, "LEAVE GAME", "#F44336", () => this.sendAction("leave-game"));
             this.ui.muteBtn = await createBtn(buttonsRow, "🔊", "#607D8B", () => {
                 this.isMuted = !this.isMuted;
                 this.ui.muteBtn.text = this.isMuted ? "🔇" : "🔊";
