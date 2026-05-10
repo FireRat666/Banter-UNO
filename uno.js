@@ -21,6 +21,7 @@
             this.isConfirmationDialogOpen = false;
             this.confirmCallback = null;
             this.isMuted = false;
+            this.playersInitiallyLoaded = {}; // Track initial disconnected state for sound suppression
 
             const urlParams = new URLSearchParams(window.location.search);
             const getParam = (attr, defaultValue) => {
@@ -774,11 +775,18 @@
                     };
                     this.log("Game state cleared in space, resetting local state.");
                 }
+                this.playersInitiallyLoaded = {}; // Clear if state is reset
             } else {
                 // Only update if the new state is different from the current state to avoid unnecessary re-renders
                 if (JSON.stringify(this.gameState) !== JSON.stringify(newGameState)) {
                     this.gameState = newGameState;
                     this.log("Synced game state from BanterSpace:", this.gameState);
+
+                    // Populate playersInitiallyLoaded based on the newly synced state
+                    this.playersInitiallyLoaded = {};
+                    for (const playerId in this.gameState.players) {
+                        this.playersInitiallyLoaded[playerId] = this.gameState.players[playerId].isDisconnected;
+                    }
                 }
             }
             this.updateUI();
@@ -1050,7 +1058,9 @@
                             state.lastPlayedWildCard = null;
                             state.turnStartTime = null; // No active turn, no timer
                         }
-                        this.playSound("leave"); // Use leave sound for timeout
+                        if (data.playSound !== false) { // Only play sound if explicitly not false
+                            this.playSound("leave");
+                        }
                     }
                     break;
             }
@@ -1556,24 +1566,26 @@
                 const isPresent = !!scene.users[userId];
 
                 if (isPresent && player.isDisconnected) {
+                    // Player reconnected
                     this.log(`Player ${userId} reconnected.`);
                     player.isDisconnected = false;
                     player.disconnectTime = null;
                     stateChanged = true;
                 } else if (!isPresent && !player.isDisconnected) {
+                    // Player just became absent, start grace period
                     this.log(`Player ${userId} detected as gone, starting grace period.`);
                     player.isDisconnected = true;
                     player.disconnectTime = now;
                     stateChanged = true;
-                }
-
-                if (player.isDisconnected && player.disconnectTime) {
-                    if (now - player.disconnectTime >= DISCONNECT_TIMEOUT_MS) {
-                        this.log(`Player ${userId} grace period expired. Removing.`);
-                        this.sendAction("timeout-player", { timedOutPlayerId: userId });
-                        // timeout-player will handle deletion and state update
-                        return; // Exit and wait for next tick as sendAction triggers update
-                    }
+                } else if (player.isDisconnected && player.disconnectTime && (now - player.disconnectTime >= DISCONNECT_TIMEOUT_MS)) {
+                    // Player's grace period expired
+                    this.log(`Player ${userId} grace period expired. Marking for removal.`);
+                    // Determine if sound should be played:
+                    // Play sound if the player was NOT disconnected when the state was initially loaded (i.e., they disconnected during this session).
+                    const wasInitiallyDisconnected = this.playersInitiallyLoaded.hasOwnProperty(userId) && this.playersInitiallyLoaded[userId];
+                    const playSound = !wasInitiallyDisconnected;
+                    this.sendAction("timeout-player", { timedOutPlayerId: userId, playSound: playSound });
+                    return; // Exit and wait for next tick as sendAction triggers update
                 }
             }
 
@@ -1588,7 +1600,7 @@
                 if (timeElapsed >= this.gameState.turnDuration) {
                     this.log(`Player ${this.gameState.currentPlayerId} timed out!`);
                     // The host should send an action to remove the player
-                    this.sendAction("timeout-player", { timedOutPlayerId: this.gameState.currentPlayerId });
+                    this.sendAction("timeout-player", { timedOutPlayerId: this.gameState.currentPlayerId, playSound: true });
                 }
             }
         }
