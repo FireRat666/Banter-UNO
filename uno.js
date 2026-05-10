@@ -1380,7 +1380,7 @@
                 }
 
                 slice.sRoot.SetStyles({ display: 'flex', backgroundColor: 'rgba(20, 20, 20, 0.93)' });
-                slice.nameText.text = playerAtPos.name + ` (${playerAtPos.hand.length} cards)`;
+                slice.nameText.text = playerAtPos.name + ` (${(playerAtPos.hand || []).length} cards)`;
 
                 // Timer display is handled by updateTimerDisplay()
                 // slice.timerText.text = "";
