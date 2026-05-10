@@ -824,12 +824,16 @@
         }
 
         // Helper to update and save game state
-        updateState(patch) {
-            if (!this.gameState) {
-                this.log("Cannot update state: gameState is null.");
-                return;
-            }
+        async updateState(patch) {
+            if (!this.gameState) return;
             Object.assign(this.gameState, patch);
+            
+            // If a sound was triggered during logic, sync it
+            if (this.gameState._triggerSound) {
+                this.gameState.lastSound = { file: this.gameState._triggerSound, ts: Date.now() };
+                delete this.gameState._triggerSound;
+            }
+
             scene.SetPublicSpaceProps({ [this.stateKey]: JSON.stringify(this.gameState) }); // Changed STATE_KEY to this.stateKey
             this.sync(); // Sync immediately after updating the space state
         }
@@ -1555,13 +1559,10 @@
                     stateChanged = true;
                 } else if (player.isDisconnected && player.disconnectTime && (now - player.disconnectTime >= DISCONNECT_TIMEOUT_MS)) {
                     // Player's grace period expired
-                    this.log(`Player ${userId} grace period expired. Marking for removal.`);
-                    // Determine if sound should be played:
-                    // Play sound if the player was NOT disconnected when the state was initially loaded (i.e., they disconnected during this session).
+                    this.log(`Player ${userId} grace period expired. Removing.`);
                     const wasInitiallyDisconnected = this.playersInitiallyLoaded.hasOwnProperty(userId) && this.playersInitiallyLoaded[userId];
-                    const playSound = !wasInitiallyDisconnected;
-                    this.sendAction("timeout-player", { timedOutPlayerId: userId, playSound: playSound });
-                    return; // Exit and wait for next tick as sendAction triggers update
+                    this.applyGameLogic(this.gameState, "timeout-player", userId, player.name, { timedOutPlayerId: userId, playSound: !wasInitiallyDisconnected });
+                    stateChanged = true;
                 }
             }
 
@@ -1575,8 +1576,8 @@
 
                 if (timeElapsed >= this.gameState.turnDuration) {
                     this.log(`Player ${this.gameState.currentPlayerId} timed out!`);
-                    // The host should send an action to remove the player
-                    this.sendAction("timeout-player", { timedOutPlayerId: this.gameState.currentPlayerId, playSound: true });
+                    this.applyGameLogic(this.gameState, "timeout-player", this.gameState.currentPlayerId, "System", { timedOutPlayerId: this.gameState.currentPlayerId, playSound: true });
+                    stateChanged = true;
                 }
             }
         }
