@@ -1361,6 +1361,7 @@
                     slice.timerText.text = "";
                     slice.sRoot.SetStyles({ display: 'none' });
                     slice.hRoot.SetStyles({ display: 'none' });
+                    if (slice.wedgeMat) slice.wedgeMat.color = new BS.Vector4(0.15, 0.15, 0.15, 1);
                     continue;
                 }
 
