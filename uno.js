@@ -4,7 +4,6 @@
 
     const MAX_PLAYERS = 10; // Uno typically 2-10 players
     const MAX_HAND_CARDS = 20; // Uno can have many cards in hand
-    // Removed: let STATE_KEY = "uno_game_state"; // Key for BanterSpace state
     const TURN_DURATION = 90 * 1000; // 900 seconds in milliseconds
     const DISCONNECT_TIMEOUT_MS = 45000; // 45 seconds grace period
 
@@ -22,6 +21,8 @@
             this.confirmCallback = null;
             this.isMuted = false;
             this.playersInitiallyLoaded = {}; // Track initial disconnected state for sound suppression
+            this.joinTime = 0; // Timestamp when this client first fully synced the game state
+            this.firstSyncDone = false; // Flag to ensure playersInitiallyLoaded is set only once
 
             const urlParams = new URLSearchParams(window.location.search);
             const getParam = (attr, defaultValue) => {
@@ -77,6 +78,36 @@
             if (this.params.debug) console.log("[UNO Banter]", ...args);
         }
 
+        playLocalSound(soundFile) {
+            if (this.isMuted) return;
+            const now = Date.now();
+            this.audioTracker = this.audioTracker || {};
+            if (this.audioTracker[soundFile] && now - this.audioTracker[soundFile] < 100) return;
+            this.audioTracker[soundFile] = now;
+
+            // Sound assets.
+            const soundMap = {
+                "join": "https://uno.firer.at/Assets/playerJoin.ogg",
+                "leave": "https://uno.firer.at/Assets/playerKick.ogg",
+                "start": "https://uno.firer.at/Assets/gameStart.ogg",
+                "play_card": "https://uno.firer.at/Assets/card_flick.ogg",
+                "draw_card": "https://uno.firer.at/Assets/card_flick.ogg",
+                "uno": "https://uno.firer.at/Assets/ding%20ding.ogg",
+                "win": "https://uno.firer.at/Assets/fanfare with pop.ogg",
+                "pass": "https://uno.firer.at/Assets/ding%20ding.ogg"
+            };
+            const url = soundMap[soundFile];
+            if (!url) {
+                this.log("Sound not found:", soundFile);
+                return;
+            }
+
+            const audio = new Audio(url);
+            audio.crossOrigin = "anonymous";
+            audio.volume = 0.3;
+            audio.play().catch(e => this.log("Audio play failed: " + e.message));
+        }
+
         async init() {
             if (scene) return;
             scene = BS.BanterScene.GetInstance();
@@ -97,6 +128,7 @@
             scene.On("user-left", this.onSpaceUserLeft.bind(this)); // Listen for user leaving the space
             // Trigger initial state sync immediately after registering the listener
             this.sync();
+            this.joinTime = Date.now(); // Set join time after first sync attempt
 
             setInterval(() => this.tick(), 1000); // Renamed tickTimers to tick
         }
@@ -735,61 +767,61 @@
             if (!newGameState) {
                 // If no state exists in space, initialize a default local state
                 if (!this.gameState) {
-                    this.gameState = {
-                        players: {},
-                        deck: [],
-                        discardPile: [],
-                        currentPlayerId: null,
-                        currentCard: null,
-                        direction: 1,
-                        gameStarted: false,
-                        pendingDraw: 0,
-                        winner: null,
-                        awaitingColorChoice: null,
-                        lastPlayedWildCard: null,
-                        lastAction: null,
-                        currentHostUid: null,
-                        turnStartTime: null, // Initialize turnStartTime
-                        turnDuration: TURN_DURATION // Initialize turnDuration
-                    };
+                    this.gameState = this.getDefaultState(); // Use getDefaultState
                     this.log("Game state not found in space, initializing local default state.");
                 } else {
                     // If newGameState is null but this.gameState exists, it means the state was cleared in space.
                     // Reset local state to default.
-                    this.gameState = {
-                        players: {},
-                        deck: [],
-                        discardPile: [],
-                        currentPlayerId: null,
-                        currentCard: null,
-                        direction: 1,
-                        gameStarted: false,
-                        pendingDraw: 0,
-                        winner: null,
-                        awaitingColorChoice: null,
-                        lastPlayedWildCard: null,
-                        lastAction: null,
-                        currentHostUid: null,
-                        turnStartTime: null, // Reset turnStartTime
-                        turnDuration: TURN_DURATION // Reset turnDuration
-                    };
+                    this.gameState = this.getDefaultState(); // Use getDefaultState
                     this.log("Game state cleared in space, resetting local state.");
                 }
                 this.playersInitiallyLoaded = {}; // Clear if state is reset
+                this.firstSyncDone = false; // Reset flag
             } else {
-                // Only update if the new state is different from the current state to avoid unnecessary re-renders
+                // Check for sound to play
+                const oldSound = this.gameState ? this.gameState.lastSound : null;
+                if (newGameState.lastSound && (!oldSound || newGameState.lastSound.ts !== oldSound.ts)) {
+                    // Only play sounds triggered after we joined, or if it's the very first sound
+                    if (newGameState.lastSound.ts > this.joinTime || this.joinTime === 0) {
+                        this.playLocalSound(newGameState.lastSound.file);
+                    }
+                }
+
                 if (JSON.stringify(this.gameState) !== JSON.stringify(newGameState)) {
                     this.gameState = newGameState;
                     this.log("Synced game state from BanterSpace:", this.gameState);
 
-                    // Populate playersInitiallyLoaded based on the newly synced state
-                    this.playersInitiallyLoaded = {};
-                    for (const playerId in this.gameState.players) {
-                        this.playersInitiallyLoaded[playerId] = this.gameState.players[playerId].isDisconnected;
+                    if (!this.firstSyncDone) { // Populate only on first successful sync
+                        this.playersInitiallyLoaded = {};
+                        for (const playerId in this.gameState.players) {
+                            this.playersInitiallyLoaded[playerId] = this.gameState.players[playerId].isDisconnected;
+                        }
+                        this.firstSyncDone = true;
                     }
                 }
             }
             this.updateUI();
+        }
+
+        getDefaultState() {
+            return {
+                players: {},
+                deck: [],
+                discardPile: [],
+                currentPlayerId: null,
+                currentCard: null,
+                direction: 1,
+                gameStarted: false,
+                pendingDraw: 0,
+                winner: null,
+                awaitingColorChoice: null,
+                lastPlayedWildCard: null,
+                lastAction: null,
+                currentHostUid: null,
+                turnStartTime: null,
+                turnDuration: TURN_DURATION,
+                lastSound: null // Add lastSound to default state
+            };
         }
 
         // Helper to update and save game state
@@ -804,7 +836,7 @@
         }
 
         // Function to send actions and update BanterSpace state
-        async sendAction(action, data = {}) {
+        async sendAction(action, data = {}, senderUid = null) { // Added senderUid for host logic
             const localUser = scene.localUser;
             if (!localUser) {
                 this.log("Local user not available. Cannot send action.");
@@ -817,45 +849,29 @@
                 return;
             }
 
-            let currentSpaceStateRaw = scene.spaceState.public[this.stateKey]; // Changed STATE_KEY to this.stateKey
+            let currentSpaceStateRaw = scene.spaceState.public[this.stateKey];
             let currentSpaceState;
             try {
-                currentSpaceState = currentSpaceStateRaw ? JSON.parse(currentSpaceStateRaw) : null;
+                currentSpaceState = currentSpaceStateRaw ? JSON.parse(currentSpaceStateRaw) : this.getDefaultState(); // Use getDefaultState
             } catch (error) {
                 this.log("Error parsing current space state:", error);
-                currentSpaceState = null;
-            }
-
-            // If no state exists in space, initialize a default state for processing
-            if (!currentSpaceState) {
-                currentSpaceState = {
-                    players: {},
-                    deck: [],
-                    discardPile: [],
-                    currentPlayerId: null,
-                    currentCard: null,
-                    direction: 1,
-                    gameStarted: false,
-                    pendingDraw: 0,
-                    winner: null,
-                    awaitingColorChoice: null,
-                    lastPlayedWildCard: null,
-                    lastAction: null,
-                    currentHostUid: null, // Initialize currentHostUid
-                    turnStartTime: null, // Initialize turnStartTime
-                    turnDuration: TURN_DURATION // Initialize turnDuration
-                };
+                currentSpaceState = this.getDefaultState(); // Use getDefaultState
             }
 
             // Create a deep copy to modify
             let newState = JSON.parse(JSON.stringify(currentSpaceState));
 
             // Apply game logic based on action
-            const updatedState = this.applyGameLogic(newState, action, localUser.uid, localUser.name, data);
+            const updated = this.applyGameLogic(newState, action, senderUid || localUser.uid, localUser.name, data);
 
-            if (updatedState) {
+            if (updated) {
+                // If the logic triggered a sound, sync it
+                if (updated._triggerSound) {
+                    updated.lastSound = { file: updated._triggerSound, ts: Date.now() };
+                    delete updated._triggerSound;
+                }
                 // Only update if logic applied changes
-                await scene.SetPublicSpaceProps({ [this.stateKey]: JSON.stringify(updatedState) }); // Changed STATE_KEY to this.stateKey
+                await scene.SetPublicSpaceProps({ [this.stateKey]: JSON.stringify(updated) });
                 this.sync(); // Sync immediately after updating the space state
             }
         }
@@ -864,23 +880,7 @@
         applyGameLogic(state, action, userId, userName, data) {
             // Initialize state if it's empty or if currentHostUid is missing
             if (!state.players || state.currentHostUid === undefined) {
-                state = {
-                    players: {},
-                    deck: [],
-                    discardPile: [],
-                    currentPlayerId: null,
-                    currentCard: null,
-                    direction: 1, // 1 for clockwise, -1 for counter-clockwise
-                    gameStarted: false,
-                    pendingDraw: 0,
-                    winner: null,
-                    awaitingColorChoice: null, // New state for wild card color choice
-                    lastPlayedWildCard: null, // Store the wild card that needs color choice
-                    lastAction: null, // For debugging/history
-                    currentHostUid: null, // Initialize currentHostUid
-                    turnStartTime: null, // Initialize turnStartTime
-                    turnDuration: TURN_DURATION // Initialize turnDuration
-                };
+                state = this.getDefaultState(); // Use getDefaultState
             }
 
             const player = state.players[userId];
@@ -897,7 +897,7 @@
                             hasCalledUno: false,
                             hasDrawnThisTurn: false // Initialize new property
                         };
-                        this.playSound("join");
+                        this.triggerSound(state, "join"); // Changed to triggerSound
                     }
                     break;
                 case "leave-game":
@@ -908,7 +908,9 @@
                         playerIds.forEach((id, idx) => {
                             state.players[id].position = idx;
                         });
-                        this.playSound("leave");
+                        if (data.playSound !== false) { // Conditionally play sound
+                            this.triggerSound(state, "leave"); // Changed to triggerSound
+                        }
                         if (playerIds.length < 2 && state.gameStarted) {
                             state.gameStarted = false; // End game if not enough players
                             state.winner = null;
@@ -917,9 +919,9 @@
                     break;
                 case "start-game":
                     // Only host can start the game
-                    if (this.isHost() && !state.gameStarted && Object.keys(state.players).length >= 2) {
+                    if (this.isHost() && (!state.gameStarted || state.winner) && Object.keys(state.players).length >= 2) {
                         state = this.initializeNewGame(state);
-                        this.playSound("start");
+                        this.triggerSound(state, "start"); // Changed to triggerSound
                     }
                     break;
                 case "play-card":
@@ -938,7 +940,7 @@
                                 state.lastPlayedWildCard = cardToPlay;
                                 // Do NOT set currentCard or apply effects yet.
                                 // Do NOT call nextTurn yet.
-                                this.playSound("play_card");
+                                this.triggerSound(state, "play_card"); // Changed to triggerSound
                             } else {
                                 state.currentCard = cardToPlay;
                                 this.applyCardEffect(state, cardToPlay);
@@ -953,10 +955,10 @@
                                 if (player.hand.length === 0) {
                                     state.winner = userId;
                                     state.gameStarted = false;
-                                    this.playSound("win");
+                                    this.triggerSound(state, "win"); // Changed to triggerSound
                                 } else {
                                     this.nextTurn(state);
-                                    this.playSound("play_card");
+                                    this.triggerSound(state, "play_card"); // Changed to triggerSound
                                 }
                             }
                         } else {
@@ -976,7 +978,7 @@
                             state.turnStartTime = Date.now(); // Reset timer on action
                         }
                         player.hasDrawnThisTurn = true; // Player has drawn a card this turn
-                        this.playSound("draw_card");
+                        this.triggerSound(state, "draw_card"); // Changed to triggerSound
                         // Do not call nextTurn here if only 1 card drawn, player can still play or pass
                     }
                     break;
@@ -985,7 +987,7 @@
                         player.hasDrawnThisTurn = false; // Reset for next turn
                         state.turnStartTime = Date.now(); // Reset timer on action
                         this.nextTurn(state);
-                        this.playSound("pass"); // Assuming a 'pass' sound exists
+                        this.triggerSound(state, "pass"); // Changed to triggerSound
                     } else {
                         this.log("Invalid pass-turn action by", userName);
                     }
@@ -993,7 +995,7 @@
                 case "call-uno":
                     if (player && (player.hand.length === 1 || player.hand.length === 2)) {
                         player.hasCalledUno = true;
-                        this.playSound("uno");
+                        this.triggerSound(state, "uno"); // Changed to triggerSound
                     }
                     break;
                 case "choose-wild-color":
@@ -1014,10 +1016,10 @@
                         if (player.hand.length === 0) { // Use 'player' here as it's the one who played the card
                             state.winner = userId;
                             state.gameStarted = false;
-                            this.playSound("win");
+                            this.triggerSound(state, "win"); // Changed to triggerSound
                         } else {
                             this.nextTurn(state);
-                            this.playSound("play_card"); // Or a specific wild card sound
+                            this.triggerSound(state, "play_card"); // Changed to triggerSound
                         }
 
                         state.awaitingColorChoice = null;
@@ -1059,7 +1061,7 @@
                             state.turnStartTime = null; // No active turn, no timer
                         }
                         if (data.playSound !== false) { // Only play sound if explicitly not false
-                            this.playSound("leave");
+                            this.triggerSound(state, "leave"); // Changed to triggerSound
                         }
                     }
                     break;
@@ -1275,34 +1277,8 @@
             state.turnStartTime = Date.now(); // Start timer for the new current player
         }
 
-        playSound(name) {
-            if (this.isMuted) return;
-            const now = Date.now();
-            this.audioTracker = this.audioTracker || {};
-            if (this.audioTracker[name] && now - this.audioTracker[name] < 100) return;
-            this.audioTracker[name] = now;
-
-            // Sound assets.
-            const soundMap = {
-                "join": "https://uno.firer.at/Assets/playerJoin.ogg",
-                "leave": "https://uno.firer.at/Assets/playerKick.ogg",
-                "start": "https://uno.firer.at/Assets/gameStart.ogg",
-                "play_card": "https://uno.firer.at/Assets/card_flick.ogg",
-                "draw_card": "https://uno.firer.at/Assets/card_flick.ogg",
-                "uno": "https://uno.firer.at/Assets/ding%20ding.ogg",
-                "win": "https://uno.firer.at/Assets/fanfare with pop.ogg",
-                "pass": "https://uno.firer.at/Assets/ding%20ding.ogg"
-            };
-            const url = soundMap[name];
-            if (!url) {
-                this.log("Sound not found:", name);
-                return;
-            }
-
-            const audio = new Audio(url);
-            audio.crossOrigin = "anonymous";
-            audio.volume = 0.3;
-            audio.play().catch(e => this.log("Audio play failed: " + e.message));
+        triggerSound(state, name) {
+            state._triggerSound = name;
         }
 
         onCardClick(index) {
