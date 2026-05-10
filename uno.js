@@ -4,7 +4,7 @@
 
     const MAX_PLAYERS = 10; // Uno typically 2-10 players
     const MAX_HAND_CARDS = 20; // Uno can have many cards in hand
-    let STATE_KEY = "uno_game_state"; // Key for BanterSpace state
+    // Removed: let STATE_KEY = "uno_game_state"; // Key for BanterSpace state
     const TURN_DURATION = 90 * 1000; // 900 seconds in milliseconds
     const DISCONNECT_TIMEOUT_MS = 45000; // 45 seconds grace period
 
@@ -37,7 +37,7 @@
                 instance: getParam("instance", "demo-uno"), // Unique instance for Uno
                 debug: getParam("debug", "false") === "true"
             };
-            STATE_KEY = this.params.instance;
+            this.stateKey = this.params.instance; // Changed STATE_KEY to this.stateKey
         }
 
         wrapText(text, maxChars = 19) {
@@ -698,7 +698,7 @@
         // BanterSpace state changed handler
         onSpaceStateChanged(e) {
             // Only process if the change is relevant to our game state key
-            if (e.detail.changes.some(c => c.property === STATE_KEY)) {
+            if (e.detail.changes.some(c => c.property === this.stateKey)) { // Changed STATE_KEY to this.stateKey
                 this.sync();
             }
         }
@@ -723,7 +723,7 @@
                 return;
             }
 
-            const newGameStateRaw = scene.spaceState.public[STATE_KEY];
+            const newGameStateRaw = scene.spaceState.public[this.stateKey]; // Changed STATE_KEY to this.stateKey
             let newGameState;
             try {
                 newGameState = newGameStateRaw ? JSON.parse(newGameStateRaw) : null;
@@ -799,7 +799,7 @@
                 return;
             }
             Object.assign(this.gameState, patch);
-            scene.SetPublicSpaceProps({ [STATE_KEY]: JSON.stringify(this.gameState) });
+            scene.SetPublicSpaceProps({ [this.stateKey]: JSON.stringify(this.gameState) }); // Changed STATE_KEY to this.stateKey
             this.sync(); // Sync immediately after updating the space state
         }
 
@@ -817,7 +817,7 @@
                 return;
             }
 
-            let currentSpaceStateRaw = scene.spaceState.public[STATE_KEY]; // Access public state
+            let currentSpaceStateRaw = scene.spaceState.public[this.stateKey]; // Changed STATE_KEY to this.stateKey
             let currentSpaceState;
             try {
                 currentSpaceState = currentSpaceStateRaw ? JSON.parse(currentSpaceStateRaw) : null;
@@ -855,7 +855,7 @@
 
             if (updatedState) {
                 // Only update if logic applied changes
-                await scene.SetPublicSpaceProps({ [STATE_KEY]: JSON.stringify(updatedState) }); // Stringify the state
+                await scene.SetPublicSpaceProps({ [this.stateKey]: JSON.stringify(updatedState) }); // Changed STATE_KEY to this.stateKey
                 this.sync(); // Sync immediately after updating the space state
             }
         }
