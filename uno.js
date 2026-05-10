@@ -21,7 +21,7 @@
             this.confirmCallback = null;
             this.isMuted = false;
             this.playersInitiallyLoaded = {}; // Track initial disconnected state for sound suppression
-            this.joinTime = 0; // Timestamp when this client first fully synced the game state
+            this.joinTime = Date.now(); // Timestamp when this client first fully synced the game state
             this.firstSyncDone = false; // Flag to ensure playersInitiallyLoaded is set only once
 
             const urlParams = new URLSearchParams(window.location.search);
@@ -128,7 +128,6 @@
             scene.On("user-left", this.onSpaceUserLeft.bind(this)); // Listen for user leaving the space
             // Trigger initial state sync immediately after registering the listener
             this.sync();
-            this.joinTime = Date.now(); // Set join time after first sync attempt
 
             setInterval(() => this.tick(), 1000); // Renamed tickTimers to tick
         }
@@ -781,8 +780,8 @@
                 // Check for sound to play
                 const oldSound = this.gameState ? this.gameState.lastSound : null;
                 if (newGameState.lastSound && (!oldSound || newGameState.lastSound.ts !== oldSound.ts)) {
-                    // Only play sounds triggered after we joined, or if it's the very first sound
-                    if (newGameState.lastSound.ts > this.joinTime || this.joinTime === 0) {
+                    // Only play sounds triggered after we joined
+                    if (newGameState.lastSound.ts > this.joinTime) {
                         this.playLocalSound(newGameState.lastSound.file);
                     }
                 }
