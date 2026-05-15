@@ -680,8 +680,8 @@
                             });
                             btn.OnClick(() => {
                                 if (this.confirmCallback) this.confirmCallback(colorName.toLowerCase());
-                                this.isConfirmationDialogOpen = false;
-                                slice.confirmOverlay.SetStyles({ display: 'none' });
+                                // Removed: this.isConfirmationDialogOpen = false;
+                                // Removed: slice.confirmOverlay.SetStyles({ display: 'none' });
                             });
                         };
                         createColorBtn("RED", "#F44336");
@@ -1469,6 +1469,19 @@
                     let status = isCurrentPlayer ? "PLAYING" : "WAITING";
                     if (playerAtPos.isDisconnected) status = "DISCONNECTED";
                     slice.statusText.text = status;
+                }
+            }
+
+            // Centralized UI hiding for confirmation dialog
+            // Only hide if a confirmation dialog is open AND the condition for it to be open is no longer met
+            if (this.isConfirmationDialogOpen) {
+                const localPlayerSlice = this.ui.slices[localPlayer.position];
+                // If there's no local player, or the local player is not awaiting color choice, hide the dialog
+                if (!localPlayer || this.gameState.awaitingColorChoice !== localUid) {
+                    this.isConfirmationDialogOpen = false;
+                    if (localPlayerSlice && localPlayerSlice.confirmOverlay) {
+                        localPlayerSlice.confirmOverlay.SetStyles({ display: 'none' });
+                    }
                 }
             }
         }
