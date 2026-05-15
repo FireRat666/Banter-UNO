@@ -377,9 +377,9 @@
                     width: '100%',
                     height: '100%',
                     color: '#000000',
-                    fontSize: '14px',
+                    fontSize: '30px',
                     fontWeight: 'bold',
-                    textAlign: 'upper-left'
+                    textAlign: 'center'
                 });
 
                 cardContainer.OnClick(() => this.onCardClick(i));
@@ -447,7 +447,7 @@
                     color: '#000000',
                     fontSize: '16px',
                     fontWeight: 'bold',
-                    textAlign: 'upper-left'
+                    textAlign: 'center'
                 });
                 confirmCardSlots.push({ container: cardContainer, label: cardLabel });
             }
@@ -573,7 +573,7 @@
 
             const creditLabel = panel.CreateLabel(undefined, rootEl);
             await creditLabel.Async();
-            creditLabel.text = "UNO! is a registered trademark of Mattel, Inc.\nAdapted for Banter by FireRat\nBeta 0.3.1";
+            creditLabel.text = "UNO! is a registered trademark of Mattel, Inc.\nAdapted for Banter by FireRat\nBeta v0.3.2";
             creditLabel.SetStyles({ backgroundColor: 'rgba(0, 0, 0, 0)', color: '#aaaaaa', fontSize: '25px', marginTop: '20px', textAlign: 'center' });
             this.ui.creditLabel = creditLabel;
 
@@ -582,8 +582,8 @@
             await currentCardContainer.Async();
             currentCardContainer.SetStyles({
                 display: 'none',
-                width: '450px',
-                height: '300px',
+                width: '500px',
+                height: '320px',
                 backgroundColor: 'rgba(0, 0, 0, 0.9)',
                 padding: '25px',
                 borderRadius: '20px',
@@ -603,7 +603,7 @@
                 width: '100%',
                 height: '100%',
                 color: 'black',
-                fontSize: '48px',
+                fontSize: '58px',
                 fontWeight: 'bold',
                 textAlign: 'center'
             });
@@ -698,8 +698,8 @@
                 if (previewCards && previewCards.length > 0) {
                     previewCards.forEach((card, idx) => {
                         if (idx < slice.confirmCardSlots.length) {
-                            slice.confirmCardSlots[idx].label.text = card.text;
-                            slice.confirmCardSlots[idx].container.SetStyles({ display: 'flex', backgroundColor: card.color || 'rgba(51, 51, 51, 1)' }); // Changed from #ffffff
+                            slice.confirmCardSlots[idx].label.text = this.getCardText(card); // Use getCardText here
+                            slice.confirmCardSlots[idx].container.SetStyles({ display: 'flex', backgroundColor: this.getCardColor(card) });
                         }
                     });
                 }
@@ -710,10 +710,14 @@
         // Helper to get card text for Uno
         getCardText(card) {
             if (!card) return "";
-            if (card.type === "wild" || card.type === "wild_draw_4") {
-                return `${card.value.replace('_', ' ').toUpperCase()}\n(Color: ${card.chosenColor || '?'})`;
+            if (card.type === "wild") {
+                return `WILD\n(Color: ${card.chosenColor ? card.chosenColor.toUpperCase() : '?'})`;
             }
-            return `${card.color.toUpperCase()} ${card.value}`;
+            if (card.type === "wild_draw_4") {
+                return `WILD\nDRAW 4\n(Color: ${card.chosenColor ? card.chosenColor.toUpperCase() : '?'})`;
+            }
+            // For regular cards, format as COLOR\nVALUE
+            return `${card.color.toUpperCase()}\n${card.value.toUpperCase()}`;
         }
 
         // Helper to determine if local user is the host
