@@ -4,7 +4,7 @@
 
     const MAX_PLAYERS = 10; // Uno typically 2-10 players
     const MAX_HAND_CARDS = 20; // Uno can have many cards in hand
-    const TURN_DURATION = 90 * 1000; // 900 seconds in milliseconds
+    const TURN_DURATION = 90 * 1000; // 90 seconds in milliseconds
     const DISCONNECT_TIMEOUT_MS = 45000; // 45 seconds grace period
 
     class UnoGame {
@@ -952,19 +952,21 @@
                                 state.currentCard = cardToPlay;
                                 this.applyCardEffect(state, cardToPlay);
 
-                                // Removed automatic Uno penalty from here. It will be checked in nextTurn.
-                                // if (player.hand.length === 1 && !player.hasCalledUno) {
-                                //     this.log(`${player.name} did not call UNO! Drawing 2 cards.`);
-                                //     this.drawCardsForPlayer(state, userId, 2);
-                                // }
-                                // player.hasCalledUno = false; // Reset for next turn
+                                if (player.hand.length === 0) {
+                                    // Check UNO penalty before declaring winner (player went 1→0 without calling UNO)
+                                    if (!player.hasCalledUno) {
+                                        this.log(`${player.name} did not call UNO on winning play! Drawing 2 cards.`);
+                                        this.drawCardsForPlayer(state, userId, 2);
+                                    }
+                                    player.hasCalledUno = false;
+                                }
 
                                 if (player.hand.length === 0) {
                                     state.winner = userId;
                                     state.gameStarted = false;
                                     this.triggerSound(state, "win"); // Changed to triggerSound
                                 } else {
-                                    this.nextTurn(state);
+                                    this.nextTurn(state, userId);
                                     this.triggerSound(state, "play_card"); // Changed to triggerSound
                                 }
                             }
@@ -979,7 +981,7 @@
                             this.drawCardsForPlayer(state, userId, state.pendingDraw);
                             state.pendingDraw = 0;
                             state.turnStartTime = Date.now(); // Reset timer on action
-                            this.nextTurn(state); // Skip this player's turn after drawing forced cards
+                            this.nextTurn(state, userId); // Skip this player's turn after drawing forced cards
                         } else {
                             this.drawCardsForPlayer(state, userId, 1);
                             state.turnStartTime = Date.now(); // Reset timer on action
@@ -993,39 +995,43 @@
                     if (player && state.currentPlayerId === userId && !state.winner && !state.awaitingColorChoice && player.hasDrawnThisTurn) {
                         player.hasDrawnThisTurn = false; // Reset for next turn
                         state.turnStartTime = Date.now(); // Reset timer on action
-                        this.nextTurn(state);
+                        this.nextTurn(state, userId);
                         this.triggerSound(state, "pass"); // Changed to triggerSound
                     } else {
                         this.log("Invalid pass-turn action by", userName);
                     }
                     break;
                 case "call-uno":
+                    // UNO can be called at 2 cards (before playing second-to-last) or 1 card (after playing).
+                    // This is intentional: players need to call UNO before or as they play their second-to-last card.
                     if (player && (player.hand.length === 1 || player.hand.length === 2)) {
                         player.hasCalledUno = true;
                         this.triggerSound(state, "uno"); // Changed to triggerSound
                     }
                     break;
                 case "choose-wild-color":
-                    if (state.awaitingColorChoice === userId && state.lastPlayedWildCard && data.chosenColor) {
+                    const validColors = ["red", "green", "blue", "yellow"];
+                    if (state.awaitingColorChoice === userId && state.lastPlayedWildCard && data.chosenColor && validColors.includes(data.chosenColor)) {
                         state.lastPlayedWildCard.chosenColor = data.chosenColor;
                         state.currentCard = state.lastPlayedWildCard;
                         this.applyCardEffect(state, state.currentCard);
                         state.turnStartTime = Date.now(); // Reset timer on action
 
-                        // Removed automatic Uno penalty from here. It will be checked in nextTurn.
-                        // const wildCardPlayer = state.players[userId];
-                        // if (wildCardPlayer && wildCardPlayer.hand.length === 1 && !wildCardPlayer.hasCalledUno) {
-                        //     this.log(`${wildCardPlayer.name} did not call UNO! Drawing 2 cards.`);
-                        //     this.drawCardsForPlayer(state, userId, 2);
-                        // }
-                        // if (wildCardPlayer) wildCardPlayer.hasCalledUno = false; // Reset for next turn
+                        if (player.hand.length === 0) {
+                            // Check UNO penalty before declaring winner (player went 1→0 without calling UNO)
+                            if (!player.hasCalledUno) {
+                                this.log(`${player.name} did not call UNO on winning play! Drawing 2 cards.`);
+                                this.drawCardsForPlayer(state, userId, 2);
+                            }
+                            player.hasCalledUno = false;
+                        }
 
-                        if (player.hand.length === 0) { // Use 'player' here as it's the one who played the card
+                        if (player.hand.length === 0) {
                             state.winner = userId;
                             state.gameStarted = false;
                             this.triggerSound(state, "win"); // Changed to triggerSound
                         } else {
-                            this.nextTurn(state);
+                            this.nextTurn(state, userId);
                             this.triggerSound(state, "play_card"); // Changed to triggerSound
                         }
 
@@ -1047,9 +1053,15 @@
                             state.players[id].position = idx;
                         });
 
+                        // If the timed out player was awaiting a wild color choice, clear it
+                        if (state.awaitingColorChoice === timedOutPlayerId) {
+                            state.awaitingColorChoice = null;
+                            state.lastPlayedWildCard = null;
+                        }
+
                         // If the timed out player was the current player, advance turn
                         if (state.currentPlayerId === timedOutPlayerId) {
-                            this.nextTurn(state); // nextTurn will handle setting turnStartTime for the new current player
+                            this.nextTurn(state, timedOutPlayerId);
                         }
 
                         // If the timed out player was the host, reassign host
@@ -1170,9 +1182,12 @@
         isValidPlay(cardToPlay, currentCard, pendingDraw) {
             if (!cardToPlay || !currentCard) return false;
 
-            // If there's a pending draw, only a +2 or +4 can be played
+            // If there's a pending draw, only a matching-color +2 or a +4 can stack.
+            // The return statement here exits the function entirely — regular wild cards cannot bypass this.
             if (pendingDraw > 0) {
-                return (cardToPlay.value === "draw_2" && cardToPlay.color === currentCard.color) ||
+                // Use chosenColor for wild_draw_4 (whose base color is "black") so draw_2 can stack on it
+                const effectiveColor = currentCard.chosenColor || currentCard.color;
+                return (cardToPlay.value === "draw_2" && cardToPlay.color === effectiveColor) ||
                        cardToPlay.value === "wild_draw_4";
             }
 
@@ -1236,7 +1251,7 @@
             }
         }
 
-        nextTurn(state) {
+        nextTurn(state, actualPreviousPlayerId) {
             const playerIds = Object.keys(state.players);
             if (playerIds.length === 0) {
                 state.currentPlayerId = null;
@@ -1244,7 +1259,9 @@
                 return;
             }
 
-            const previousPlayerId = state.currentPlayerId; // Store current player before advancing
+            // Use the explicitly passed previous player ID if provided (handles skip/reverse correctly),
+            // otherwise fall back to state.currentPlayerId for backward compatibility.
+            const previousPlayerId = actualPreviousPlayerId || state.currentPlayerId;
             const previousPlayer = state.players[previousPlayerId];
 
             let currentIndex = playerIds.indexOf(state.currentPlayerId);
@@ -1440,6 +1457,7 @@
                             slice.playBtn.SetStyles({ display: isMyTurn && canPlaySelectedCard ? 'flex' : 'none' });
                             slice.drawBtn.SetStyles({ display: isMyTurn && this.selectedCardIds.length === 0 && !localPlayer.hasDrawnThisTurn ? 'flex' : 'none' });
                             slice.passBtn.SetStyles({ display: isMyTurn && localPlayer.hasDrawnThisTurn && this.selectedCardIds.length === 0 ? 'flex' : 'none' });
+                            // Show UNO button at 2 cards (before playing second-to-last) or 1 card (after playing). This is intentional design.
                             slice.unoBtn.SetStyles({ display: (localPlayer.hand.length === 1 || localPlayer.hand.length === 2) && !localPlayer.hasCalledUno ? 'flex' : 'none' });
 
                             const currentPlayer = players[this.gameState.currentPlayerId];
