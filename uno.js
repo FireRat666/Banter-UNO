@@ -1014,18 +1014,41 @@
                     break;
                 case "leave-game":
                     if (player) {
+                        this.log(`Player ${userId} is leaving the game.`);
+
+                        // If the leaving player was awaiting a wild color choice, resolve it first
+                        if (state.awaitingColorChoice === userId && state.lastPlayedWildCard) {
+                            state.lastPlayedWildCard.chosenColor = "red"; // Assign default color
+                            state.currentCard = state.lastPlayedWildCard;
+                            this.applyCardEffect(state, state.currentCard);
+                            state.awaitingColorChoice = null;
+                            state.lastPlayedWildCard = null;
+                        }
+
+                        // If the leaving player was the current player, advance turn before deleting
+                        if (state.currentPlayerId === userId) {
+                            this.nextTurn(state, userId);
+                        }
+
                         delete state.players[userId];
+
                         // Reassign positions if needed, or handle empty seats
                         const playerIds = Object.keys(state.players);
                         playerIds.forEach((id, idx) => {
                             state.players[id].position = idx;
                         });
+
                         if (data.playSound !== false) { // Conditionally play sound
                             this.triggerSound(state, "leave"); // Changed to triggerSound
                         }
                         if (playerIds.length < 2 && state.gameStarted) {
                             state.gameStarted = false; // End game if not enough players
                             state.winner = null;
+                            state.currentPlayerId = null;
+                            state.pendingDraw = 0;
+                            state.awaitingColorChoice = null;
+                            state.lastPlayedWildCard = null;
+                            state.turnStartTime = null; // No active turn, no timer
                         }
                     }
                     break;
@@ -1106,8 +1129,8 @@
                                 player.lastDrawnCardId = player.hand[player.hand.length - 1].id;
                             }
                             state.turnStartTime = Date.now(); // Reset timer on action
+                            player.hasDrawnThisTurn = true; // Player has drawn a card this turn
                         }
-                        player.hasDrawnThisTurn = true; // Player has drawn a card this turn
                         this.triggerSound(state, "draw_card"); // Changed to triggerSound
                         // Do not call nextTurn here if only 1 card drawn, player can still play or pass
                     }
@@ -1180,6 +1203,21 @@
                     const timedOutPlayerId = data.timedOutPlayerId;
                     if (state.players[timedOutPlayerId]) {
                         this.log(`Player ${timedOutPlayerId} timed out and is being removed.`);
+
+                        // If the timed out player was awaiting a wild color choice, resolve it first
+                        if (state.awaitingColorChoice === timedOutPlayerId && state.lastPlayedWildCard) {
+                            state.lastPlayedWildCard.chosenColor = "red"; // Assign default color
+                            state.currentCard = state.lastPlayedWildCard;
+                            this.applyCardEffect(state, state.currentCard);
+                            state.awaitingColorChoice = null;
+                            state.lastPlayedWildCard = null;
+                        }
+
+                        // If the timed out player was the current player, advance turn before deleting
+                        if (state.currentPlayerId === timedOutPlayerId) {
+                            this.nextTurn(state, timedOutPlayerId);
+                        }
+
                         delete state.players[timedOutPlayerId];
 
                         // Reassign positions
@@ -1187,17 +1225,6 @@
                         playerIds.forEach((id, idx) => {
                             state.players[id].position = idx;
                         });
-
-                        // If the timed out player was awaiting a wild color choice, clear it
-                        if (state.awaitingColorChoice === timedOutPlayerId) {
-                            state.awaitingColorChoice = null;
-                            state.lastPlayedWildCard = null;
-                        }
-
-                        // If the timed out player was the current player, advance turn
-                        if (state.currentPlayerId === timedOutPlayerId) {
-                            this.nextTurn(state, timedOutPlayerId);
-                        }
 
                         // If the timed out player was the host, reassign host
                         if (state.currentHostUid === timedOutPlayerId) {
@@ -1311,6 +1338,12 @@
                     // Reshuffle discard pile into deck, keeping top card
                     const currentTopCard = state.discardPile.pop();
                     state.deck = state.discardPile;
+                    // Clear chosen colors of wild cards being reshuffled
+                    state.deck.forEach(card => {
+                        if (card.type === "wild" || card.type === "wild_draw_4") {
+                            delete card.chosenColor;
+                        }
+                    });
                     this.shuffleDeck(state.deck);
                     state.discardPile = [currentTopCard];
                     if (state.deck.length === 0) {
@@ -1331,12 +1364,18 @@
                 if (houseRules && houseRules.stacking === false) {
                     return false;
                 }
-                // Stacking allowed: only a matching-color +2 or a +4 can stack.
-                // The return statement here exits the function entirely — regular wild cards cannot bypass this.
-                // Use chosenColor for wild_draw_4 (whose base color is "black") so draw_2 can stack on it
-                const effectiveColor = currentCard.chosenColor || currentCard.color;
-                return (cardToPlay.value === "draw_2" && cardToPlay.color === effectiveColor) ||
-                       cardToPlay.value === "wild_draw_4";
+                // Stacking rules:
+                // - A Draw 2 can be stacked on any other Draw 2, or a Wild Draw 4.
+                if (currentCard.value === "draw_2") {
+                    return cardToPlay.value === "draw_2" || cardToPlay.value === "wild_draw_4";
+                }
+                // - A Wild Draw 4 can stack on another Wild Draw 4, or a Draw 2 if it matches the chosen color.
+                if (currentCard.value === "wild_draw_4") {
+                    const effectiveColor = currentCard.chosenColor;
+                    return cardToPlay.value === "wild_draw_4" ||
+                           (cardToPlay.value === "draw_2" && cardToPlay.color === effectiveColor);
+                }
+                return false;
             }
 
             // Wild cards can always be played
@@ -1381,7 +1420,9 @@
         }
 
         skipNextPlayer(state) {
-            const playerIds = Object.keys(state.players);
+            const playerIds = Object.values(state.players)
+                .sort((a, b) => a.position - b.position)
+                .map(p => p.id);
             if (playerIds.length === 0) return;
 
             const currentIndex = playerIds.indexOf(state.currentPlayerId);
@@ -1400,7 +1441,9 @@
         }
 
         nextTurn(state, actualPreviousPlayerId) {
-            const playerIds = Object.keys(state.players);
+            const playerIds = Object.values(state.players)
+                .sort((a, b) => a.position - b.position)
+                .map(p => p.id);
             if (playerIds.length === 0) {
                 state.currentPlayerId = null;
                 state.turnStartTime = null; // No current player, no timer
