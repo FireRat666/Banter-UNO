@@ -629,6 +629,106 @@
                 backgroundImage: 'none'
             });
             this.ui.winnerLabel = winnerLabel;
+
+            // House Rules Settings Panel (host-only, pre-game)
+            this.ui.settingsBtn = await createBtn(buttonsRow, "⚙ RULES", "#795548", () => {
+                this.settingsPanelOpen = !this.settingsPanelOpen;
+                this.sync();
+            });
+
+            const settingsContainer = panel.CreateVisualElement(rootEl);
+            await settingsContainer.Async();
+            settingsContainer.SetStyles({
+                display: 'none',
+                flexDirection: 'column',
+                alignItems: 'center',
+                backgroundColor: 'rgba(30, 30, 30, 0.95)',
+                paddingTop: '20px',
+                paddingBottom: '20px',
+                paddingLeft: '25px',
+                paddingRight: '25px',
+                borderRadius: '15px',
+                borderWidth: '2px',
+                borderColor: '#795548',
+                marginBottom: '15px',
+                width: '820px',
+                backgroundImage: 'none'
+            });
+
+            const settingsTitle = panel.CreateLabel(undefined, settingsContainer);
+            await settingsTitle.Async();
+            settingsTitle.text = "HOUSE RULES";
+            settingsTitle.SetStyles({ backgroundColor: 'rgba(0,0,0,0)', color: '#FFAB40', fontSize: '28px', fontWeight: 'bold', marginBottom: '15px' });
+
+            // Helper to create a toggle row
+            const createToggleRow = async (parent, label, ruleKey, defaultValue) => {
+                const row = panel.CreateVisualElement(parent);
+                await row.Async();
+                row.SetStyles({
+                    display: 'flex',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: '10px',
+                    backgroundColor: 'rgba(0,0,0,0)',
+                    width: '100%',
+                    paddingLeft: '10px',
+                    paddingRight: '10px'
+                });
+
+                const lbl = panel.CreateLabel(undefined, row);
+                await lbl.Async();
+                lbl.text = label;
+                lbl.SetStyles({ backgroundColor: 'rgba(0,0,0,0)', color: 'white', fontSize: '22px', width: '500px' });
+
+                const btn = panel.CreateButton(row);
+                await btn.Async();
+                btn.text = defaultValue ? "ON" : "OFF";
+                btn.SetStyles({
+                    backgroundColor: defaultValue ? '#4CAF50' : '#F44336',
+                    color: 'white',
+                    paddingTop: '10px',
+                    paddingBottom: '10px',
+                    paddingLeft: '30px',
+                    paddingRight: '30px',
+                    borderRadius: '8px',
+                    fontSize: '22px',
+                    borderWidth: '0px',
+                    backgroundImage: 'none',
+                    width: '120px'
+                });
+
+                btn.OnClick(() => {
+                    const currentRules = this.gameState.houseRules || { stacking: true, playAnyAfterDraw: true, autoUnoPenalty: true };
+                    const newValue = !currentRules[ruleKey];
+                    this.sendAction("set-house-rules", { houseRules: { [ruleKey]: newValue } });
+                });
+
+                return { row, label: lbl, btn, ruleKey };
+            };
+
+            const toggleStacking = await createToggleRow(settingsContainer, "Draw Stacking (+2/+4)", "stacking", true);
+            const togglePlayAny = await createToggleRow(settingsContainer, "Play Any Card After Draw", "playAnyAfterDraw", true);
+            const toggleAutoUno = await createToggleRow(settingsContainer, "Auto UNO Penalty", "autoUnoPenalty", true);
+
+            this.ui.settingsPanel = {
+                container: settingsContainer,
+                toggles: [toggleStacking, togglePlayAny, toggleAutoUno]
+            };
+
+            // Active rules summary label (shown during gameplay for all players)
+            const rulesLabel = panel.CreateLabel(undefined, rootEl);
+            await rulesLabel.Async();
+            rulesLabel.text = "";
+            rulesLabel.SetStyles({
+                display: 'none',
+                backgroundColor: 'rgba(0,0,0,0)',
+                color: '#aaaaaa',
+                fontSize: '20px',
+                marginBottom: '10px',
+                textAlign: 'center'
+            });
+            this.ui.rulesLabel = rulesLabel;
         }
 
         confirm(message, callback, previewCards = null, confirmationType = 'default') {
@@ -823,7 +923,12 @@
                 currentHostUid: null,
                 turnStartTime: null,
                 turnDuration: TURN_DURATION,
-                lastSound: null // Add lastSound to default state
+                lastSound: null,
+                houseRules: {
+                    stacking: true,           // Allow stacking draw_2 on draw_2, wild_draw_4 on draw cards
+                    playAnyAfterDraw: true,   // Allow playing any valid card after drawing (not just the drawn card)
+                    autoUnoPenalty: true,      // Automatically enforce UNO penalty (vs requiring another player to catch)
+                }
             };
         }
 
@@ -935,10 +1040,21 @@
                     // Logic to validate and play a card
                     if (player && state.currentPlayerId === userId && !state.winner && !state.awaitingColorChoice) {
                         const cardToPlay = player.hand.find(c => c.id === data.cardId);
-                        if (cardToPlay && this.isValidPlay(cardToPlay, state.currentCard, state.pendingDraw)) {
+
+                        // Enforce play-after-draw restriction: if player has drawn this turn
+                        // and playAnyAfterDraw is disabled, only the drawn card can be played
+                        if (player.hasDrawnThisTurn && state.houseRules && !state.houseRules.playAnyAfterDraw) {
+                            if (cardToPlay && cardToPlay.id !== player.lastDrawnCardId) {
+                                this.log("Cannot play a card other than the drawn card (playAnyAfterDraw is off)");
+                                break;
+                            }
+                        }
+
+                        if (cardToPlay && this.isValidPlay(cardToPlay, state.currentCard, state.pendingDraw, state.houseRules)) {
                             player.hand = player.hand.filter(c => c.id !== data.cardId);
                             state.discardPile.push(cardToPlay);
                             player.hasDrawnThisTurn = false; // Reset after playing a card
+                            player.lastDrawnCardId = null; // Clear last drawn card tracking
                             state.turnStartTime = Date.now(); // Reset timer on action
 
                             if (cardToPlay.type === "wild" || cardToPlay.type === "wild_draw_4") {
@@ -952,7 +1068,7 @@
                                 state.currentCard = cardToPlay;
                                 this.applyCardEffect(state, cardToPlay);
 
-                                if (player.hand.length === 0) {
+                                if (player.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
                                     // Check UNO penalty before declaring winner (player went 1→0 without calling UNO)
                                     if (!player.hasCalledUno) {
                                         this.log(`${player.name} did not call UNO on winning play! Drawing 2 cards.`);
@@ -983,7 +1099,12 @@
                             state.turnStartTime = Date.now(); // Reset timer on action
                             this.nextTurn(state, userId); // Skip this player's turn after drawing forced cards
                         } else {
+                            // Track the card drawn so we can enforce play-after-draw rule
+                            const handSizeBefore = player.hand.length;
                             this.drawCardsForPlayer(state, userId, 1);
+                            if (player.hand.length > handSizeBefore) {
+                                player.lastDrawnCardId = player.hand[player.hand.length - 1].id;
+                            }
                             state.turnStartTime = Date.now(); // Reset timer on action
                         }
                         player.hasDrawnThisTurn = true; // Player has drawn a card this turn
@@ -1017,7 +1138,7 @@
                         this.applyCardEffect(state, state.currentCard);
                         state.turnStartTime = Date.now(); // Reset timer on action
 
-                        if (player.hand.length === 0) {
+                        if (player.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
                             // Check UNO penalty before declaring winner (player went 1→0 without calling UNO)
                             if (!player.hasCalledUno) {
                                 this.log(`${player.name} did not call UNO on winning play! Drawing 2 cards.`);
@@ -1039,6 +1160,20 @@
                         state.lastPlayedWildCard = null;
                     } else {
                         this.log("Invalid choose-wild-color action by", userName);
+                    }
+                    break;
+                case "set-house-rules":
+                    // Only host can change house rules, and only before game starts
+                    if (state.currentHostUid === userId && !state.gameStarted && data.houseRules) {
+                        const allowedKeys = ["stacking", "playAnyAfterDraw", "autoUnoPenalty"];
+                        if (!state.houseRules) {
+                            state.houseRules = { stacking: true, playAnyAfterDraw: true, autoUnoPenalty: true };
+                        }
+                        for (const key of allowedKeys) {
+                            if (typeof data.houseRules[key] === "boolean") {
+                                state.houseRules[key] = data.houseRules[key];
+                            }
+                        }
                     }
                     break;
                 case "timeout-player":
@@ -1092,6 +1227,9 @@
 
         // Uno Game Logic Helpers
         initializeNewGame(state) {
+            // Preserve house rules across games — they persist from pre-game configuration
+            const existingRules = state.houseRules;
+
             state.deck = this.createUnoDeck();
             this.shuffleDeck(state.deck);
             state.discardPile = [];
@@ -1103,24 +1241,29 @@
             state.lastPlayedWildCard = null;
             state.turnStartTime = null; // Reset turnStartTime
             state.turnDuration = TURN_DURATION; // Set turnDuration
+            state.houseRules = existingRules || { stacking: true, playAnyAfterDraw: true, autoUnoPenalty: true };
 
             const playerIds = Object.keys(state.players);
             playerIds.forEach(id => {
                 state.players[id].hand = [];
                 state.players[id].hasCalledUno = false;
                 state.players[id].hasDrawnThisTurn = false; // Initialize for new game
+                state.players[id].lastDrawnCardId = null; // Reset drawn card tracking
                 this.drawCardsForPlayer(state, id, 7); // Deal 7 cards
             });
 
             // Start with a non-action card on the discard pile
+            // Safeguard: limit attempts to prevent theoretical infinite loop
             let firstCard;
+            let attempts = 0;
             do {
                 firstCard = state.deck.shift();
                 if (firstCard.type === "action" || firstCard.type === "wild" || firstCard.type === "wild_draw_4") {
                     state.deck.push(firstCard); // Put action cards back and reshuffle
                     this.shuffleDeck(state.deck);
                 }
-            } while (firstCard.type === "action" || firstCard.type === "wild" || firstCard.type === "wild_draw_4");
+                attempts++;
+            } while ((firstCard.type === "action" || firstCard.type === "wild" || firstCard.type === "wild_draw_4") && attempts < 108);
 
             state.currentCard = firstCard;
             state.discardPile.push(firstCard);
@@ -1179,12 +1322,17 @@
             }
         }
 
-        isValidPlay(cardToPlay, currentCard, pendingDraw) {
+        isValidPlay(cardToPlay, currentCard, pendingDraw, houseRules) {
             if (!cardToPlay || !currentCard) return false;
 
-            // If there's a pending draw, only a matching-color +2 or a +4 can stack.
-            // The return statement here exits the function entirely — regular wild cards cannot bypass this.
+            // If there's a pending draw, check stacking rules
             if (pendingDraw > 0) {
+                // If stacking is disabled, no cards can be played — player must draw
+                if (houseRules && houseRules.stacking === false) {
+                    return false;
+                }
+                // Stacking allowed: only a matching-color +2 or a +4 can stack.
+                // The return statement here exits the function entirely — regular wild cards cannot bypass this.
                 // Use chosenColor for wild_draw_4 (whose base color is "black") so draw_2 can stack on it
                 const effectiveColor = currentCard.chosenColor || currentCard.color;
                 return (cardToPlay.value === "draw_2" && cardToPlay.color === effectiveColor) ||
@@ -1284,10 +1432,12 @@
             }
             state.currentPlayerId = playerIds[nextIndex];
 
-            // Apply Uno penalty to previous player if applicable
-            if (previousPlayer && previousPlayer.hand.length === 1 && !previousPlayer.hasCalledUno) {
-                this.log(`${previousPlayer.name} did not call UNO! Drawing 2 cards.`);
-                this.drawCardsForPlayer(state, previousPlayerId, 2);
+            // Apply Uno penalty to previous player if applicable (respects autoUnoPenalty house rule)
+            if (!state.houseRules || state.houseRules.autoUnoPenalty !== false) {
+                if (previousPlayer && previousPlayer.hand.length === 1 && !previousPlayer.hasCalledUno) {
+                    this.log(`${previousPlayer.name} did not call UNO! Drawing 2 cards.`);
+                    this.drawCardsForPlayer(state, previousPlayerId, 2);
+                }
             }
             // Reset hasCalledUno for the previous player after checking
             if (previousPlayer) {
@@ -1374,6 +1524,43 @@
                 this.ui.winnerLabel.SetStyles({ display: 'none' });
             }
 
+            // House Rules Settings Panel
+            const showSettingsBtn = userIsHost && !this.gameState.gameStarted;
+            this.ui.settingsBtn.SetStyles({ display: showSettingsBtn ? 'flex' : 'none' });
+
+            if (this.ui.settingsPanel) {
+                const showSettings = showSettingsBtn && this.settingsPanelOpen;
+                this.ui.settingsPanel.container.SetStyles({ display: showSettings ? 'flex' : 'none' });
+
+                // Update toggle button states to reflect current house rules
+                if (showSettings && this.gameState.houseRules) {
+                    const rules = this.gameState.houseRules;
+                    this.ui.settingsPanel.toggles.forEach(toggle => {
+                        const isOn = rules[toggle.ruleKey] !== false;
+                        toggle.btn.text = isOn ? "ON" : "OFF";
+                        toggle.btn.SetStyles({
+                            backgroundColor: isOn ? '#4CAF50' : '#F44336'
+                        });
+                    });
+                }
+            }
+
+            // Rules summary label — show active rules during gameplay for all players
+            if (this.ui.rulesLabel && this.gameState.houseRules) {
+                const rules = this.gameState.houseRules;
+                const ruleTexts = [];
+                if (rules.stacking === false) ruleTexts.push("No Stacking");
+                if (rules.playAnyAfterDraw === false) ruleTexts.push("Draw-Only Play");
+                if (rules.autoUnoPenalty === false) ruleTexts.push("No Auto UNO Penalty");
+
+                if (ruleTexts.length > 0 && this.gameState.gameStarted) {
+                    this.ui.rulesLabel.text = "Rules: " + ruleTexts.join(" | ");
+                    this.ui.rulesLabel.SetStyles({ display: 'flex' });
+                } else {
+                    this.ui.rulesLabel.SetStyles({ display: 'none' });
+                }
+            }
+
             // Update Slices
             for (let i = 0; i < MAX_PLAYERS; i++) {
                 const slice = this.ui.slices[i];
@@ -1431,7 +1618,14 @@
                             if (this.selectedCardIds.length > 0) {
                                 selectedCard = localPlayer.hand.find(c => c.id === this.selectedCardIds[0]);
                             }
-                            const canPlaySelectedCard = selectedCard && this.isValidPlay(selectedCard, this.gameState.currentCard, this.gameState.pendingDraw);
+                            let canPlaySelectedCard = selectedCard && this.isValidPlay(selectedCard, this.gameState.currentCard, this.gameState.pendingDraw, this.gameState.houseRules);
+
+                            // Enforce play-after-draw restriction on UI
+                            if (canPlaySelectedCard && localPlayer.hasDrawnThisTurn && this.gameState.houseRules && !this.gameState.houseRules.playAnyAfterDraw) {
+                                if (selectedCard.id !== localPlayer.lastDrawnCardId) {
+                                    canPlaySelectedCard = false;
+                                }
+                            }
 
                             // First, hide all card UI elements
                             slice.cardUIs.forEach(cardUI => {
@@ -1442,7 +1636,15 @@
                                 const cardUI = slice.cardUIs[idx];
                                 if (cardUI && card) {
                                     const isSelected = this.selectedCardIds.includes(card.id);
-                                    const isValid = this.isValidPlay(card, this.gameState.currentCard, this.gameState.pendingDraw);
+                                    let isValid = this.isValidPlay(card, this.gameState.currentCard, this.gameState.pendingDraw, this.gameState.houseRules);
+
+                                    // If playAnyAfterDraw is disabled and player has drawn, only the drawn card is playable
+                                    if (localPlayer.hasDrawnThisTurn && this.gameState.houseRules && !this.gameState.houseRules.playAnyAfterDraw) {
+                                        if (card.id !== localPlayer.lastDrawnCardId) {
+                                            isValid = false;
+                                        }
+                                    }
+
                                     cardUI.label.text = this.getCardText(card);
                                     cardUI.container.SetStyles({
                                         display: 'flex',
@@ -1456,7 +1658,7 @@
 
                             slice.playBtn.SetStyles({ display: isMyTurn && canPlaySelectedCard ? 'flex' : 'none' });
                             slice.drawBtn.SetStyles({ display: isMyTurn && this.selectedCardIds.length === 0 && !localPlayer.hasDrawnThisTurn ? 'flex' : 'none' });
-                            slice.passBtn.SetStyles({ display: isMyTurn && localPlayer.hasDrawnThisTurn && this.selectedCardIds.length === 0 ? 'flex' : 'none' });
+                            slice.passBtn.SetStyles({ display: isMyTurn && localPlayer.hasDrawnThisTurn ? 'flex' : 'none' });
                             // Show UNO button at 2 cards (before playing second-to-last) or 1 card (after playing). This is intentional design.
                             slice.unoBtn.SetStyles({ display: (localPlayer.hand.length === 1 || localPlayer.hand.length === 2) && !localPlayer.hasCalledUno ? 'flex' : 'none' });
 
