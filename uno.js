@@ -928,13 +928,17 @@
 
             switch (action) {
                 case "join-game":
-                    if (!player && !state.gameStarted) {
+                    if (!player && !state.gameStarted && Object.keys(state.players).length < MAX_PLAYERS) {
+                        let availablePos = 0;
+                        const usedPositions = Object.values(state.players).map(p => p.position);
+                        while (usedPositions.includes(availablePos)) availablePos++;
+
                         state.players[userId] = {
                             id: userId,
                             name: userName,
                             hand: [],
                             score: 0,
-                            position: Object.keys(state.players).length, // Assign position
+                            position: availablePos, // Assign position
                             hasCalledUno: false,
                             hasDrawnThisTurn: false // Initialize new property
                         };
@@ -958,19 +962,13 @@
                         if (state.currentPlayerId === userId) {
                             this.nextTurn(state, userId);
                         }
-
                         delete state.players[userId];
-
-                        // Reassign positions if needed, or handle empty seats
-                        const playerIds = Object.keys(state.players);
-                        playerIds.forEach((id, idx) => {
-                            state.players[id].position = idx;
-                        });
+                        // Preserving seat positions by not reassigning them on leave
 
                         if (data.playSound !== false) { // Conditionally play sound
                             this.triggerSound(state, "leave"); // Changed to triggerSound
                         }
-                        if (playerIds.length < 2 && state.gameStarted) {
+                        if (Object.keys(state.players).length < 2 && state.gameStarted) {
                             state.gameStarted = false; // End game if not enough players
                             state.winner = null;
                             state.currentPlayerId = null;
@@ -1147,14 +1145,8 @@
                             state.pendingDraw = 0;
                             this.nextTurn(state, timedOutPlayerId);
                         }
-
                         delete state.players[timedOutPlayerId];
-
-                        // Reassign positions
-                        const playerIds = Object.keys(state.players);
-                        playerIds.forEach((id, idx) => {
-                            state.players[id].position = idx;
-                        });
+                        // Preserving seat positions by not reassigning them on timeout
 
                         // If the timed out player was the host, reassign host
                         if (state.currentHostUid === timedOutPlayerId) {
@@ -1668,10 +1660,10 @@
             // Centralized UI hiding for confirmation dialog
             // Only hide if a confirmation dialog is open AND the condition for it to be open is no longer met
             if (this.isConfirmationDialogOpen) {
-                const localPlayerSlice = this.ui.slices[localPlayer.position];
                 // If there's no local player, or the local player is not awaiting color choice, hide the dialog
                 if (!localPlayer || this.gameState.awaitingColorChoice !== localUid) {
                     this.isConfirmationDialogOpen = false;
+                    const localPlayerSlice = localPlayer ? this.ui.slices[localPlayer.position] : null;
                     if (localPlayerSlice && localPlayerSlice.confirmOverlay) {
                         localPlayerSlice.confirmOverlay.SetStyles({ display: 'none' });
                     }
