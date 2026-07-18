@@ -41,34 +41,6 @@
             this.stateKey = this.params.instance; // Changed STATE_KEY to this.stateKey
         }
 
-        wrapText(text, maxChars = 19) {
-            if (!text) return "";
-            const words = text.replace(/\n/g, ' ').split(/\s+/).filter(word => word.length > 0);
-            const lines = [];
-            let currentLine = "";
-
-            for (const word of words) {
-                const testLine = currentLine.length > 0 ? currentLine + " " + word : word;
-                if (testLine.length > maxChars) {
-                    if (currentLine.length > 0) {
-                        lines.push(currentLine.trim());
-                        currentLine = word;
-                    } else {
-                        lines.push(word);
-                        currentLine = "";
-                    }
-                } else {
-                    currentLine = testLine;
-                }
-            }
-
-            if (currentLine.trim().length > 0) {
-                lines.push(currentLine.trim());
-            }
-
-            return lines.join('\n');
-        }
-
         parseVector3(str) {
             const parts = str.split(" ").map(parseFloat);
             return new BS.Vector3(parts[0] || 0, parts[1] || 0, parts[2] || 0);
@@ -93,7 +65,7 @@
                 "play_card": "https://uno.firer.at/Assets/card_flick.ogg",
                 "draw_card": "https://uno.firer.at/Assets/card_flick.ogg",
                 "uno": "https://uno.firer.at/Assets/ding%20ding.ogg",
-                "win": "https://uno.firer.at/Assets/fanfare with pop.ogg",
+                "win": "https://uno.firer.at/Assets/fanfare%20with%20pop.ogg",
                 "pass": "https://uno.firer.at/Assets/ding%20ding.ogg"
             };
             const url = soundMap[soundFile];
@@ -408,56 +380,12 @@
             await confirmMsg.Async();
             confirmMsg.SetStyles({ backgroundColor: 'rgba(0, 0, 0, 0)', color: 'white', fontSize: '36px', marginBottom: '20px', fontWeight: 'bold' });
 
-            const confirmCardsRow = hPanel.CreateVisualElement(confirmOverlay);
-            await confirmCardsRow.Async();
-            confirmCardsRow.SetStyles({
-                display: 'flex',
-                flexDirection: 'row',
-                marginBottom: '30px',
-                justifyContent: 'center',
-                alignItems: 'center',
-                width: '100%',
-                backgroundColor: 'rgba(0, 0, 0, 0.8)'
-            });
-
-            const confirmCardSlots = [];
-            for (let i = 0; i < 1; i++) {
-                const cardContainer = hPanel.CreateVisualElement(confirmCardsRow);
-                await cardContainer.Async();
-                cardContainer.SetStyles({
-                    display: 'none',
-                    width: '250px',
-                    height: '320px',
-                    backgroundColor: 'rgba(0, 0, 0, 0)',
-                    padding: '20px',
-                    borderRadius: '15px',
-                    borderWidth: '4px',
-                    borderColor: 'rgba(102, 102, 102, 1)',
-                    flexDirection: 'column',
-                    alignItems: 'flex-start',
-                    marginRight: '25px'
-                });
-
-                const cardLabel = hPanel.CreateLabel(undefined, cardContainer);
-                await cardLabel.Async();
-                cardLabel.SetStyles({
-                    backgroundColor: 'rgba(0, 0, 0, 0)',
-                    width: '100%',
-                    height: '100%',
-                    color: '#000000',
-                    fontSize: '16px',
-                    fontWeight: 'bold',
-                    textAlign: 'center'
-                });
-                confirmCardSlots.push({ container: cardContainer, label: cardLabel });
-            }
-
             const confirmButtonsRow = hPanel.CreateVisualElement(confirmOverlay);
             await confirmButtonsRow.Async();
             confirmButtonsRow.SetStyles({
-                display: 'flex',
+                display: 'none',
                 flexDirection: 'row',
-                backgroundColor: 'rgba(0, 0, 0, 0)' // This should be fully transparent
+                backgroundColor: 'rgba(0, 0, 0, 0)'
             });
 
             await createBtn(hPanel, confirmButtonsRow, "CANCEL", "#F44336", () => {
@@ -470,12 +398,47 @@
                 confirmOverlay.SetStyles({ display: 'none' });
             });
 
+            const colorChoiceRow = hPanel.CreateVisualElement(confirmOverlay);
+            await colorChoiceRow.Async();
+            colorChoiceRow.SetStyles({
+                display: 'none',
+                flexDirection: 'row',
+                marginBottom: '30px',
+                backgroundColor: 'rgba(0,0,0,0)'
+            });
+
+            const createColorBtn = async (colorName, hexColor) => {
+                const btn = hPanel.CreateButton(colorChoiceRow);
+                await btn.Async();
+                btn.text = colorName.toUpperCase();
+                btn.SetStyles({
+                    backgroundColor: hexColor,
+                    color: colorName === "YELLOW" ? "black" : "white",
+                    paddingTop: '15px',
+                    paddingBottom: '15px',
+                    paddingLeft: '30px',
+                    paddingRight: '30px',
+                    borderRadius: '12px',
+                    fontSize: '25px',
+                    borderWidth: '0px',
+                    marginRight: '20px'
+                });
+                btn.OnClick(() => {
+                    if (this.confirmCallback) this.confirmCallback(colorName.toLowerCase());
+                });
+            };
+
+            await createColorBtn("RED", "#F44336");
+            await createColorBtn("BLUE", "#2196F3");
+            await createColorBtn("GREEN", "#4CAF50");
+            await createColorBtn("YELLOW", "#FFEB3B");
+
             return {
                 root: sliceRoot,
                 wedgeMat: matNormal,
                 statusObj, sRoot, nameText, statusText, timerText,
                 handObj, hRoot, actionsRow, playBtn, drawBtn, passBtn, unoBtn, selectionLabel, cardsGrid, cardUIs,
-                confirmOverlay, confirmMsg, confirmCardSlots, confirmButtonsRow, hPanel, turnIndicatorBtn
+                confirmOverlay, confirmMsg, confirmButtonsRow, colorChoiceRow, hPanel, turnIndicatorBtn
             };
         }
 
@@ -748,61 +711,15 @@
             });
 
             // Hide all custom UI elements first
-            slice.confirmCardSlots.forEach(slot => slot.container.SetStyles({ display: 'none' }));
             if (slice.colorChoiceRow) slice.colorChoiceRow.SetStyles({ display: 'none' });
             if (slice.confirmButtonsRow) slice.confirmButtonsRow.SetStyles({ display: 'none' });
 
             if (confirmationType === 'choose-color') {
-                if (!slice.colorChoiceRow) {
-                    slice.colorChoiceRow = slice.hPanel.CreateVisualElement(slice.confirmOverlay);
-                    slice.colorChoiceRow.Async().then(() => {
-                        slice.colorChoiceRow.SetStyles({
-                            display: 'flex',
-                            flexDirection: 'row',
-                            marginBottom: '30px',
-                            backgroundColor: 'rgba(0,0,0,0)'
-                        });
-                        const createColorBtn = async (colorName, hexColor) => {
-                            const btn = slice.hPanel.CreateButton(slice.colorChoiceRow);
-                            await btn.Async();
-                            btn.text = colorName.toUpperCase();
-                            btn.SetStyles({
-                                backgroundColor: hexColor,
-                                color: 'white',
-                                paddingTop: '15px',
-                                paddingBottom: '15px',
-                                paddingLeft: '30px',
-                                paddingRight: '30px',
-                                borderRadius: '12px',
-                                fontSize: '25px',
-                                borderWidth: '0px',
-                                marginRight: '20px'
-                            });
-                            btn.OnClick(() => {
-                                if (this.confirmCallback) this.confirmCallback(colorName.toLowerCase());
-                                // Removed: this.isConfirmationDialogOpen = false;
-                                // Removed: slice.confirmOverlay.SetStyles({ display: 'none' });
-                            });
-                        };
-                        createColorBtn("RED", "#F44336");
-                        createColorBtn("BLUE", "#2196F3");
-                        createColorBtn("GREEN", "#4CAF50");
-                        createColorBtn("YELLOW", "#FFEB3B");
-                        slice.colorChoiceRow.SetStyles({ display: 'flex' });
-                    });
-                } else {
+                if (slice.colorChoiceRow) {
                     slice.colorChoiceRow.SetStyles({ display: 'flex' });
                 }
             } else {
                 if (slice.confirmButtonsRow) slice.confirmButtonsRow.SetStyles({ display: 'flex' });
-                if (previewCards && previewCards.length > 0) {
-                    previewCards.forEach((card, idx) => {
-                        if (idx < slice.confirmCardSlots.length) {
-                            slice.confirmCardSlots[idx].label.text = this.getCardText(card); // Use getCardText here
-                            slice.confirmCardSlots[idx].container.SetStyles({ display: 'flex', backgroundColor: this.getCardColor(card) });
-                        }
-                    });
-                }
             }
         }
 
@@ -991,8 +908,20 @@
         // Placeholder for Uno game logic
         applyGameLogic(state, action, userId, userName, data) {
             // Initialize state if it's empty or if currentHostUid is missing
-            if (!state.players || state.currentHostUid === undefined) {
-                state = this.getDefaultState(); // Use getDefaultState
+            if (!state || typeof state !== "object" || Object.keys(state).length === 0) {
+                state = this.getDefaultState();
+            } else {
+                if (!state.players) state.players = {};
+                if (!state.deck) state.deck = [];
+                if (!state.discardPile) state.discardPile = [];
+                if (state.currentHostUid === undefined) state.currentHostUid = null;
+                
+                const defaultState = this.getDefaultState();
+                for (const key in defaultState) {
+                    if (state[key] === undefined) {
+                        state[key] = defaultState[key];
+                    }
+                }
             }
 
             const player = state.players[userId];
@@ -1215,6 +1144,7 @@
 
                         // If the timed out player was the current player, advance turn before deleting
                         if (state.currentPlayerId === timedOutPlayerId) {
+                            state.pendingDraw = 0;
                             this.nextTurn(state, timedOutPlayerId);
                         }
 
@@ -1764,7 +1694,7 @@
             // Original logic for non-wild cards or wild cards without chosen color yet
             switch (card.color) {
                 case 'red': return '#FF0000';
-                case 'blue': return '#0000FF';
+                case 'blue': return '#00b3ff';
                 case 'green': return '#00FF00';
                 case 'yellow': return '#FFFF00';
                 case 'black': return '#a7a7a7'; // Grey for unchosen wild cards
