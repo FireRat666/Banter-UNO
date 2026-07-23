@@ -433,12 +433,51 @@
             await createColorBtn("GREEN", "#4CAF50");
             await createColorBtn("YELLOW", "#FFEB3B");
 
+            // Swap choice row for 7-0 rule (pre-create MAX_PLAYERS buttons to avoid runtime leaks)
+            const swapChoiceRow = hPanel.CreateVisualElement(confirmOverlay);
+            await swapChoiceRow.Async();
+            swapChoiceRow.SetStyles({
+                display: 'none',
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                justifyContent: 'center',
+                marginBottom: '20px',
+                backgroundColor: 'rgba(0,0,0,0)'
+            });
+
+            const swapPlayerBtns = [];
+            for (let si = 0; si < MAX_PLAYERS; si++) {
+                const swapBtn = hPanel.CreateButton(swapChoiceRow);
+                await swapBtn.Async();
+                swapBtn.text = "";
+                swapBtn.SetStyles({
+                    display: 'none',
+                    backgroundColor: '#2196F3',
+                    color: 'white',
+                    paddingTop: '12px',
+                    paddingBottom: '12px',
+                    paddingLeft: '20px',
+                    paddingRight: '20px',
+                    borderRadius: '10px',
+                    fontSize: '22px',
+                    borderWidth: '0px',
+                    marginRight: '10px',
+                    marginBottom: '10px'
+                });
+                swapBtn.OnClick(() => {
+                    if (this.confirmCallback && swapBtn._swapTargetId) {
+                        this.confirmCallback(swapBtn._swapTargetId);
+                    }
+                });
+                swapPlayerBtns.push(swapBtn);
+            }
+
             return {
                 root: sliceRoot,
                 wedgeMat: matNormal,
                 statusObj, sRoot, nameText, statusText, timerText,
                 handObj, hRoot, actionsRow, playBtn, drawBtn, passBtn, unoBtn, selectionLabel, cardsGrid, cardUIs,
-                confirmOverlay, confirmMsg, confirmButtonsRow, colorChoiceRow, hPanel, turnIndicatorBtn
+                confirmOverlay, confirmMsg, confirmButtonsRow, colorChoiceRow, swapChoiceRow, swapPlayerBtns, hPanel, turnIndicatorBtn
             };
         }
 
@@ -465,7 +504,7 @@
                 borderWidth: '4px',
                 borderColor: 'rgba(74, 78, 105, 1)',
                 width: '900px',
-                height: '920px',
+                height: '1050px',
                 position: 'absolute',
                 top: '0',
                 left: '0'
@@ -673,10 +712,14 @@
             const toggleStacking = await createToggleRow(settingsContainer, "Draw Stacking (+2/+4)", "stacking", true);
             const togglePlayAny = await createToggleRow(settingsContainer, "Play Any Card After Draw", "playAnyAfterDraw", true);
             const toggleAutoUno = await createToggleRow(settingsContainer, "Auto UNO Penalty", "autoUnoPenalty", true);
+            const toggleForcePlay = await createToggleRow(settingsContainer, "Force Play (auto-play drawn card)", "forcePlay", false);
+            const toggleDrawToPlay = await createToggleRow(settingsContainer, "Draw to Play (draw until playable)", "drawToPlay", false);
+            const toggleSevenZero = await createToggleRow(settingsContainer, "7-0 (swap/rotate hands)", "sevenZero", false);
+            const toggleJumpIn = await createToggleRow(settingsContainer, "Jump-In (play identical card anytime)", "jumpIn", false);
 
             this.ui.settingsPanel = {
                 container: settingsContainer,
-                toggles: [toggleStacking, togglePlayAny, toggleAutoUno]
+                toggles: [toggleStacking, togglePlayAny, toggleAutoUno, toggleForcePlay, toggleDrawToPlay, toggleSevenZero, toggleJumpIn]
             };
 
             // Active rules summary label (shown during gameplay for all players)
@@ -713,10 +756,28 @@
             // Hide all custom UI elements first
             if (slice.colorChoiceRow) slice.colorChoiceRow.SetStyles({ display: 'none' });
             if (slice.confirmButtonsRow) slice.confirmButtonsRow.SetStyles({ display: 'none' });
+            if (slice.swapChoiceRow) slice.swapChoiceRow.SetStyles({ display: 'none' });
 
             if (confirmationType === 'choose-color') {
                 if (slice.colorChoiceRow) {
                     slice.colorChoiceRow.SetStyles({ display: 'flex' });
+                }
+            } else if (confirmationType === 'choose-player-swap') {
+                if (slice.swapChoiceRow && slice.swapPlayerBtns) {
+                    // Populate the pre-created swap buttons with opponent info
+                    const opponents = Object.values(this.gameState.players).filter(p => p.id !== scene.localUser.uid);
+                    slice.swapPlayerBtns.forEach((btn, idx) => {
+                        if (idx < opponents.length) {
+                            btn.text = opponents[idx].name + ` (${opponents[idx].hand.length})`;
+                            btn._swapTargetId = opponents[idx].id;
+                            btn.SetStyles({ display: 'flex' });
+                        } else {
+                            btn.text = "";
+                            btn._swapTargetId = null;
+                            btn.SetStyles({ display: 'none' });
+                        }
+                    });
+                    slice.swapChoiceRow.SetStyles({ display: 'flex' });
                 }
             } else {
                 if (slice.confirmButtonsRow) slice.confirmButtonsRow.SetStyles({ display: 'flex' });
@@ -836,6 +897,7 @@
                 winner: null,
                 awaitingColorChoice: null,
                 lastPlayedWildCard: null,
+                awaitingSevenSwapChoice: null, // userId of player choosing who to swap hands with (7-0 rule)
                 lastAction: null,
                 currentHostUid: null,
                 turnStartTime: null,
@@ -845,6 +907,10 @@
                     stacking: true,           // Allow stacking draw_2 on draw_2, wild_draw_4 on draw cards
                     playAnyAfterDraw: true,   // Allow playing any valid card after drawing (not just the drawn card)
                     autoUnoPenalty: true,      // Automatically enforce UNO penalty (vs requiring another player to catch)
+                    forcePlay: false,         // If you draw a playable card, it is played automatically
+                    drawToPlay: false,        // Keep drawing until you get a playable card, then play it
+                    sevenZero: false,         // 7 = swap hands with chosen player, 0 = rotate all hands
+                    jumpIn: false,            // Play an identical card (same color+value) out of turn
                 }
             };
         }
@@ -958,6 +1024,11 @@
                             state.lastPlayedWildCard = null;
                         }
 
+                        // If the leaving player was awaiting a 7-0 swap choice, cancel it
+                        if (state.awaitingSevenSwapChoice === userId) {
+                            state.awaitingSevenSwapChoice = null;
+                        }
+
                         // If the leaving player was the current player, advance turn before deleting
                         if (state.currentPlayerId === userId) {
                             this.nextTurn(state, userId);
@@ -975,6 +1046,7 @@
                             state.pendingDraw = 0;
                             state.awaitingColorChoice = null;
                             state.lastPlayedWildCard = null;
+                            state.awaitingSevenSwapChoice = null;
                             state.turnStartTime = null; // No active turn, no timer
                         }
                     }
@@ -986,70 +1058,223 @@
                         this.triggerSound(state, "start"); // Changed to triggerSound
                     }
                     break;
-                case "play-card":
-                    // Logic to validate and play a card
-                    if (player && state.currentPlayerId === userId && !state.winner && !state.awaitingColorChoice) {
-                        const cardToPlay = player.hand.find(c => c.id === data.cardId);
+                case "play-card": {
+                    // Helper: finalize a card play (shared between normal and jump-in paths)
+                    const playCardLogic = (playingPlayer, playingUserId, cardToPlay) => {
+                        playingPlayer.hand = playingPlayer.hand.filter(c => c.id !== cardToPlay.id);
+                        state.discardPile.push(cardToPlay);
+                        playingPlayer.hasDrawnThisTurn = false;
+                        playingPlayer.lastDrawnCardId = null;
+                        state.turnStartTime = Date.now();
 
-                        // Enforce play-after-draw restriction: if player has drawn this turn
-                        // and playAnyAfterDraw is disabled, only the drawn card can be played
-                        if (player.hasDrawnThisTurn && state.houseRules && !state.houseRules.playAnyAfterDraw) {
-                            if (cardToPlay && cardToPlay.id !== player.lastDrawnCardId) {
-                                this.log("Cannot play a card other than the drawn card (playAnyAfterDraw is off)");
-                                break;
+                        if (cardToPlay.type === "wild" || cardToPlay.type === "wild_draw_4") {
+                            state.awaitingColorChoice = playingUserId;
+                            state.lastPlayedWildCard = cardToPlay;
+                            this.triggerSound(state, "play_card");
+                        } else {
+                            state.currentCard = cardToPlay;
+                            this.applyCardEffect(state, cardToPlay);
+
+                            // 7-0 rule: playing a 7 triggers hand swap choice
+                            if (state.houseRules && state.houseRules.sevenZero && cardToPlay.value === "7") {
+                                const otherPlayers = Object.keys(state.players).filter(id => id !== playingUserId);
+                                if (otherPlayers.length > 0) {
+                                    // Check UNO penalty before suspending for swap choice
+                                    if (playingPlayer.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
+                                        if (!playingPlayer.hasCalledUno) {
+                                            this.log(`${playingPlayer.name} did not call UNO on winning play! Drawing 2 cards.`);
+                                            this.drawCardsForPlayer(state, playingUserId, 2);
+                                        }
+                                        playingPlayer.hasCalledUno = false;
+                                    }
+                                    state.awaitingSevenSwapChoice = playingUserId;
+                                    this.triggerSound(state, "play_card");
+                                    return; // Suspend turn — awaiting swap choice
+                                }
+                            }
+
+                            // 7-0 rule: playing a 0 triggers hand rotation
+                            if (state.houseRules && state.houseRules.sevenZero && cardToPlay.value === "0") {
+                                this.rotateHands(state);
+                            }
+
+                            if (playingPlayer.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
+                                if (!playingPlayer.hasCalledUno) {
+                                    this.log(`${playingPlayer.name} did not call UNO on winning play! Drawing 2 cards.`);
+                                    this.drawCardsForPlayer(state, playingUserId, 2);
+                                }
+                                playingPlayer.hasCalledUno = false;
+                            }
+
+                            if (playingPlayer.hand.length === 0) {
+                                state.winner = playingUserId;
+                                state.gameStarted = false;
+                                this.triggerSound(state, "win");
+                            } else {
+                                this.nextTurn(state, playingUserId);
+                                this.triggerSound(state, "play_card");
                             }
                         }
+                    };
 
-                        if (cardToPlay && this.isValidPlay(cardToPlay, state.currentCard, state.pendingDraw, state.houseRules)) {
-                            player.hand = player.hand.filter(c => c.id !== data.cardId);
-                            state.discardPile.push(cardToPlay);
-                            player.hasDrawnThisTurn = false; // Reset after playing a card
-                            player.lastDrawnCardId = null; // Clear last drawn card tracking
-                            state.turnStartTime = Date.now(); // Reset timer on action
+                    if (!player || state.winner || state.awaitingColorChoice || state.awaitingSevenSwapChoice) break;
 
-                            if (cardToPlay.type === "wild" || cardToPlay.type === "wild_draw_4") {
-                                // Wild card played, now await color choice from this player
-                                state.awaitingColorChoice = userId;
-                                state.lastPlayedWildCard = cardToPlay;
-                                // Do NOT set currentCard or apply effects yet.
-                                // Do NOT call nextTurn yet.
-                                this.triggerSound(state, "play_card"); // Changed to triggerSound
-                            } else {
-                                state.currentCard = cardToPlay;
-                                this.applyCardEffect(state, cardToPlay);
+                    const cardToPlay = player.hand.find(c => c.id === data.cardId);
+                    if (!cardToPlay) break;
 
-                                if (player.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
-                                    // Check UNO penalty before declaring winner (player went 1→0 without calling UNO)
-                                    if (!player.hasCalledUno) {
-                                        this.log(`${player.name} did not call UNO on winning play! Drawing 2 cards.`);
-                                        this.drawCardsForPlayer(state, userId, 2);
-                                    }
-                                    player.hasCalledUno = false;
-                                }
-
-                                if (player.hand.length === 0) {
-                                    state.winner = userId;
-                                    state.gameStarted = false;
-                                    this.triggerSound(state, "win"); // Changed to triggerSound
-                                } else {
-                                    this.nextTurn(state, userId);
-                                    this.triggerSound(state, "play_card"); // Changed to triggerSound
-                                }
-                            }
+                    // --- Jump-In Logic ---
+                    if (state.currentPlayerId !== userId) {
+                        // Out-of-turn play is only allowed if jumpIn is enabled
+                        if (state.houseRules && state.houseRules.jumpIn &&
+                            state.currentCard &&
+                            cardToPlay.color !== "black" && // Wild cards cannot be used to jump in
+                            cardToPlay.color === state.currentCard.color &&
+                            cardToPlay.value === state.currentCard.value &&
+                            state.pendingDraw === 0) { // Cannot jump in during a pending draw stack
+                            // Valid jump-in! Set this player as current and play the card
+                            state.currentPlayerId = userId;
+                            playCardLogic(player, userId, cardToPlay);
                         } else {
-                            this.log("Invalid card play attempted by", userName);
+                            this.log("Jump-in not allowed or conditions not met for", userName);
+                        }
+                        break;
+                    }
+
+                    // --- Normal turn play ---
+                    // Enforce play-after-draw restriction
+                    if (player.hasDrawnThisTurn && state.houseRules && !state.houseRules.playAnyAfterDraw) {
+                        if (cardToPlay.id !== player.lastDrawnCardId) {
+                            this.log("Cannot play a card other than the drawn card (playAnyAfterDraw is off)");
+                            break;
                         }
                     }
+
+                    if (this.isValidPlay(cardToPlay, state.currentCard, state.pendingDraw, state.houseRules)) {
+                        playCardLogic(player, userId, cardToPlay);
+                    } else {
+                        this.log("Invalid card play attempted by", userName);
+                    }
                     break;
+                }
                 case "draw-card":
-                    if (player && state.currentPlayerId === userId && !state.winner && !state.awaitingColorChoice) {
+                    if (player && state.currentPlayerId === userId && !state.winner && !state.awaitingColorChoice && !state.awaitingSevenSwapChoice) {
                         if (state.pendingDraw > 0) {
                             this.drawCardsForPlayer(state, userId, state.pendingDraw);
                             state.pendingDraw = 0;
                             state.turnStartTime = Date.now(); // Reset timer on action
                             this.nextTurn(state, userId); // Skip this player's turn after drawing forced cards
+                        } else if (state.houseRules && state.houseRules.drawToPlay) {
+                            // Draw-to-Play: keep drawing until a playable card is found
+                            let drawnPlayable = null;
+                            let drawCount = 0;
+                            const maxDraws = 108; // Safety cap to avoid infinite loops
+                            while (drawCount < maxDraws) {
+                                const handSizeBefore = player.hand.length;
+                                this.drawCardsForPlayer(state, userId, 1);
+                                if (player.hand.length <= handSizeBefore) break; // No cards left to draw
+                                drawCount++;
+                                const drawnCard = player.hand[player.hand.length - 1];
+                                if (this.isValidPlay(drawnCard, state.currentCard, 0, state.houseRules)) {
+                                    drawnPlayable = drawnCard;
+                                    break;
+                                }
+                            }
+                            state.turnStartTime = Date.now();
+                            if (drawnPlayable) {
+                                // Auto-play the drawn playable card
+                                if (drawnPlayable.type === "wild" || drawnPlayable.type === "wild_draw_4") {
+                                    // For wild cards, set up for color choice (player must choose)
+                                    player.hand = player.hand.filter(c => c.id !== drawnPlayable.id);
+                                    state.discardPile.push(drawnPlayable);
+                                    state.awaitingColorChoice = userId;
+                                    state.lastPlayedWildCard = drawnPlayable;
+                                    player.hasDrawnThisTurn = false;
+                                } else {
+                                    player.hand = player.hand.filter(c => c.id !== drawnPlayable.id);
+                                    state.discardPile.push(drawnPlayable);
+                                    state.currentCard = drawnPlayable;
+                                    this.applyCardEffect(state, drawnPlayable);
+                                    player.hasDrawnThisTurn = false;
+
+                                    // 7-0 rule checks on auto-played card
+                                    if (state.houseRules.sevenZero && drawnPlayable.value === "7") {
+                                        const otherPlayers = Object.keys(state.players).filter(id => id !== userId);
+                                        if (otherPlayers.length > 0) {
+                                            state.awaitingSevenSwapChoice = userId;
+                                            this.triggerSound(state, "play_card");
+                                            break; // Suspend for swap choice
+                                        }
+                                    }
+                                    if (state.houseRules.sevenZero && drawnPlayable.value === "0") {
+                                        this.rotateHands(state);
+                                    }
+
+                                    if (player.hand.length === 0) {
+                                        state.winner = userId;
+                                        state.gameStarted = false;
+                                        this.triggerSound(state, "win");
+                                    } else {
+                                        this.nextTurn(state, userId);
+                                    }
+                                }
+                                this.triggerSound(state, "play_card");
+                            } else {
+                                // Drew all cards but none were playable — pass turn
+                                player.hasDrawnThisTurn = false;
+                                this.nextTurn(state, userId);
+                            }
+                        } else if (state.houseRules && state.houseRules.forcePlay) {
+                            // Force Play: draw 1 card, auto-play if playable
+                            const handSizeBefore = player.hand.length;
+                            this.drawCardsForPlayer(state, userId, 1);
+                            state.turnStartTime = Date.now();
+                            if (player.hand.length > handSizeBefore) {
+                                const drawnCard = player.hand[player.hand.length - 1];
+                                if (this.isValidPlay(drawnCard, state.currentCard, 0, state.houseRules)) {
+                                    // Auto-play the drawn card
+                                    if (drawnCard.type === "wild" || drawnCard.type === "wild_draw_4") {
+                                        player.hand = player.hand.filter(c => c.id !== drawnCard.id);
+                                        state.discardPile.push(drawnCard);
+                                        state.awaitingColorChoice = userId;
+                                        state.lastPlayedWildCard = drawnCard;
+                                        player.hasDrawnThisTurn = false;
+                                    } else {
+                                        player.hand = player.hand.filter(c => c.id !== drawnCard.id);
+                                        state.discardPile.push(drawnCard);
+                                        state.currentCard = drawnCard;
+                                        this.applyCardEffect(state, drawnCard);
+                                        player.hasDrawnThisTurn = false;
+
+                                        // 7-0 rule checks on auto-played card
+                                        if (state.houseRules.sevenZero && drawnCard.value === "7") {
+                                            const otherPlayers = Object.keys(state.players).filter(id => id !== userId);
+                                            if (otherPlayers.length > 0) {
+                                                state.awaitingSevenSwapChoice = userId;
+                                                this.triggerSound(state, "play_card");
+                                                break; // Suspend for swap choice
+                                            }
+                                        }
+                                        if (state.houseRules.sevenZero && drawnCard.value === "0") {
+                                            this.rotateHands(state);
+                                        }
+
+                                        if (player.hand.length === 0) {
+                                            state.winner = userId;
+                                            state.gameStarted = false;
+                                            this.triggerSound(state, "win");
+                                        } else {
+                                            this.nextTurn(state, userId);
+                                        }
+                                    }
+                                    this.triggerSound(state, "play_card");
+                                } else {
+                                    // Drawn card is not playable — normal draw behavior
+                                    player.lastDrawnCardId = drawnCard.id;
+                                    player.hasDrawnThisTurn = true;
+                                }
+                            }
                         } else {
-                            // Track the card drawn so we can enforce play-after-draw rule
+                            // Default: draw 1 card, allow play or pass
                             const handSizeBefore = player.hand.length;
                             this.drawCardsForPlayer(state, userId, 1);
                             if (player.hand.length > handSizeBefore) {
@@ -1058,7 +1283,7 @@
                             state.turnStartTime = Date.now(); // Reset timer on action
                             player.hasDrawnThisTurn = true; // Player has drawn a card this turn
                         }
-                        this.triggerSound(state, "draw_card"); // Changed to triggerSound
+                        this.triggerSound(state, "draw_card");
                         // Do not call nextTurn here if only 1 card drawn, player can still play or pass
                     }
                     break;
@@ -1112,12 +1337,38 @@
                         this.log("Invalid choose-wild-color action by", userName);
                     }
                     break;
+                case "choose-seven-swap":
+                    // 7-0 rule: player who played a 7 chooses who to swap hands with
+                    if (state.awaitingSevenSwapChoice === userId && data.targetPlayerId && state.players[data.targetPlayerId]) {
+                        const swapTarget = state.players[data.targetPlayerId];
+                        const tempHand = [...player.hand];
+                        player.hand = [...swapTarget.hand];
+                        swapTarget.hand = tempHand;
+                        // Reset UNO flags for both players since their hand sizes changed
+                        player.hasCalledUno = false;
+                        swapTarget.hasCalledUno = false;
+                        state.awaitingSevenSwapChoice = null;
+                        state.turnStartTime = Date.now();
+
+                        // Check for win after swap (player may now have 0 cards)
+                        if (player.hand.length === 0) {
+                            state.winner = userId;
+                            state.gameStarted = false;
+                            this.triggerSound(state, "win");
+                        } else {
+                            this.nextTurn(state, userId);
+                            this.triggerSound(state, "play_card");
+                        }
+                    } else {
+                        this.log("Invalid choose-seven-swap action by", userName);
+                    }
+                    break;
                 case "set-house-rules":
                     // Only host can change house rules, and only before game starts
                     if (state.currentHostUid === userId && !state.gameStarted && data.houseRules) {
-                        const allowedKeys = ["stacking", "playAnyAfterDraw", "autoUnoPenalty"];
+                        const allowedKeys = ["stacking", "playAnyAfterDraw", "autoUnoPenalty", "forcePlay", "drawToPlay", "sevenZero", "jumpIn"];
                         if (!state.houseRules) {
-                            state.houseRules = { stacking: true, playAnyAfterDraw: true, autoUnoPenalty: true };
+                            state.houseRules = { stacking: true, playAnyAfterDraw: true, autoUnoPenalty: true, forcePlay: false, drawToPlay: false, sevenZero: false, jumpIn: false };
                         }
                         for (const key of allowedKeys) {
                             if (typeof data.houseRules[key] === "boolean") {
@@ -1138,6 +1389,11 @@
                             this.applyCardEffect(state, state.currentCard);
                             state.awaitingColorChoice = null;
                             state.lastPlayedWildCard = null;
+                        }
+
+                        // If the timed out player was awaiting a 7-0 swap choice, cancel it
+                        if (state.awaitingSevenSwapChoice === timedOutPlayerId) {
+                            state.awaitingSevenSwapChoice = null;
                         }
 
                         // If the timed out player was the current player, advance turn before deleting
@@ -1161,6 +1417,7 @@
                             state.pendingDraw = 0;
                             state.awaitingColorChoice = null;
                             state.lastPlayedWildCard = null;
+                            state.awaitingSevenSwapChoice = null;
                             state.turnStartTime = null; // No active turn, no timer
                         }
                         if (data.playSound !== false) { // Only play sound if explicitly not false
@@ -1188,9 +1445,10 @@
             state.direction = 1;
             state.awaitingColorChoice = null;
             state.lastPlayedWildCard = null;
+            state.awaitingSevenSwapChoice = null;
             state.turnStartTime = null; // Reset turnStartTime
             state.turnDuration = TURN_DURATION; // Set turnDuration
-            state.houseRules = existingRules || { stacking: true, playAnyAfterDraw: true, autoUnoPenalty: true };
+            state.houseRules = existingRules || { stacking: true, playAnyAfterDraw: true, autoUnoPenalty: true, forcePlay: false, drawToPlay: false, sevenZero: false, jumpIn: false };
 
             const playerIds = Object.keys(state.players);
             playerIds.forEach(id => {
@@ -1286,16 +1544,14 @@
                 if (houseRules && houseRules.stacking === false) {
                     return false;
                 }
-                // Stacking rules:
-                // - A Draw 2 can be stacked on any other Draw 2, or a Wild Draw 4.
+                // Stacking rules (official house rule):
+                // - A Draw 2 can only be stacked on another Draw 2 (color doesn't matter)
                 if (currentCard.value === "draw_2") {
-                    return cardToPlay.value === "draw_2" || cardToPlay.value === "wild_draw_4";
+                    return cardToPlay.value === "draw_2";
                 }
-                // - A Wild Draw 4 can stack on another Wild Draw 4, or a Draw 2 if it matches the chosen color.
+                // - A Wild Draw 4 can only stack on another Wild Draw 4
                 if (currentCard.value === "wild_draw_4") {
-                    const effectiveColor = currentCard.chosenColor;
-                    return cardToPlay.value === "wild_draw_4" ||
-                           (cardToPlay.value === "draw_2" && cardToPlay.color === effectiveColor);
+                    return cardToPlay.value === "wild_draw_4";
                 }
                 return false;
             }
@@ -1420,6 +1676,26 @@
             state._triggerSound = name;
         }
 
+        rotateHands(state) {
+            // 7-0 rule: rotate all hands in the current direction of play
+            const playerIds = Object.values(state.players)
+                .sort((a, b) => a.position - b.position)
+                .map(p => p.id);
+            if (playerIds.length < 2) return;
+
+            const hands = playerIds.map(id => [...state.players[id].hand]);
+
+            for (let i = 0; i < playerIds.length; i++) {
+                // Each player receives the hand of the player before them in play direction
+                let sourceIndex = i - state.direction;
+                if (sourceIndex < 0) sourceIndex = playerIds.length - 1;
+                if (sourceIndex >= playerIds.length) sourceIndex = 0;
+                state.players[playerIds[i]].hand = hands[sourceIndex];
+                // Reset UNO flags since hand sizes changed
+                state.players[playerIds[i]].hasCalledUno = false;
+            }
+        }
+
         onCardClick(index) {
             if (!this.gameState || this.isConfirmationDialogOpen) return;
             const localPlayer = this.gameState.players[scene.localUser.uid];
@@ -1517,6 +1793,10 @@
                 if (rules.stacking === false) ruleTexts.push("No Stacking");
                 if (rules.playAnyAfterDraw === false) ruleTexts.push("Draw-Only Play");
                 if (rules.autoUnoPenalty === false) ruleTexts.push("No Auto UNO Penalty");
+                if (rules.forcePlay) ruleTexts.push("Force Play");
+                if (rules.drawToPlay) ruleTexts.push("Draw to Play");
+                if (rules.sevenZero) ruleTexts.push("7-0");
+                if (rules.jumpIn) ruleTexts.push("Jump-In");
 
                 if (ruleTexts.length > 0 && this.gameState.gameStarted) {
                     this.ui.rulesLabel.text = "Rules: " + ruleTexts.join(" | ");
@@ -1569,11 +1849,18 @@
                         slice.statusText.text = isMyTurn ? "YOUR TURN" : "WAITING";
 
                         // If it's my turn and I just played a wild card, open color choice dialog
-                        if (isMyTurn && this.gameState.awaitingColorChoice === localUid && this.gameState.lastPlayedWildCard) {
+                        if (this.gameState.awaitingColorChoice === localUid && this.gameState.lastPlayedWildCard) {
                             if (!this.isConfirmationDialogOpen) { // Prevent opening multiple times
                                 this.confirm("Choose a color for your Wild card:", (chosenColor) => {
                                     this.sendAction("choose-wild-color", { chosenColor });
                                 }, null, 'choose-color');
+                            }
+                        } else if (this.gameState.awaitingSevenSwapChoice === localUid) {
+                            // 7-0 rule: player must choose who to swap hands with
+                            if (!this.isConfirmationDialogOpen) {
+                                this.confirm("Choose a player to swap hands with:", (targetPlayerId) => {
+                                    this.sendAction("choose-seven-swap", { targetPlayerId });
+                                }, null, 'choose-player-swap');
                             }
                         } else {
                             // Normal hand display logic
@@ -1621,7 +1908,25 @@
                                 }
                             });
 
-                            slice.playBtn.SetStyles({ display: isMyTurn && canPlaySelectedCard ? 'flex' : 'none' });
+                            // Jump-In: show play button for matching cards even when not your turn
+                            const jumpInEnabled = this.gameState.houseRules && this.gameState.houseRules.jumpIn;
+                            let canJumpIn = false;
+                            if (jumpInEnabled && !isMyTurn && selectedCard && this.gameState.currentCard &&
+                                selectedCard.color !== "black" &&
+                                selectedCard.color === this.gameState.currentCard.color &&
+                                selectedCard.value === this.gameState.currentCard.value &&
+                                this.gameState.pendingDraw === 0 &&
+                                !this.gameState.awaitingColorChoice &&
+                                !this.gameState.awaitingSevenSwapChoice) {
+                                canJumpIn = true;
+                            }
+
+                            slice.playBtn.SetStyles({ display: (isMyTurn && canPlaySelectedCard) || canJumpIn ? 'flex' : 'none' });
+                            if (canJumpIn) {
+                                slice.playBtn.text = "JUMP IN!";
+                            } else {
+                                slice.playBtn.text = "PLAY CARD";
+                            }
                             slice.drawBtn.SetStyles({ display: isMyTurn && this.selectedCardIds.length === 0 && !localPlayer.hasDrawnThisTurn ? 'flex' : 'none' });
                             slice.passBtn.SetStyles({ display: isMyTurn && localPlayer.hasDrawnThisTurn ? 'flex' : 'none' });
                             // Show UNO button at 2 cards (before playing second-to-last) or 1 card (after playing). This is intentional design.
@@ -1660,8 +1965,10 @@
             // Centralized UI hiding for confirmation dialog
             // Only hide if a confirmation dialog is open AND the condition for it to be open is no longer met
             if (this.isConfirmationDialogOpen) {
-                // If there's no local player, or the local player is not awaiting color choice, hide the dialog
-                if (!localPlayer || this.gameState.awaitingColorChoice !== localUid) {
+                // If there's no local player, or no awaiting state matches, hide the dialog
+                const awaitingColor = this.gameState.awaitingColorChoice === localUid;
+                const awaitingSwap = this.gameState.awaitingSevenSwapChoice === localUid;
+                if (!localPlayer || (!awaitingColor && !awaitingSwap)) {
                     this.isConfirmationDialogOpen = false;
                     const localPlayerSlice = localPlayer ? this.ui.slices[localPlayer.position] : null;
                     if (localPlayerSlice && localPlayerSlice.confirmOverlay) {
