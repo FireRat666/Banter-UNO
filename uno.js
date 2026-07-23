@@ -1030,6 +1030,7 @@
                             state.lastPlayedWildCard.chosenColor = colors[Math.floor(Math.random() * colors.length)];
                             state.currentCard = state.lastPlayedWildCard;
                             this.applyCardEffect(state, state.currentCard);
+                            this.log(`Leaving player ${userId}'s wild card auto-resolved to ${state.lastPlayedWildCard.chosenColor}. Effect applied.`);
                             state.awaitingColorChoice = null;
                             state.lastPlayedWildCard = null;
                         }
@@ -1062,8 +1063,9 @@
                     }
                     break;
                 case "start-game": {
-                    // Only host can start the game (verify host directly from state)
-                    const isHostSender = state.currentHostUid ? (state.currentHostUid === userId) : (Object.keys(scene.users || {}).sort()[0] === userId);
+                    // Only host can start the game (verify host directly from state, not local cache)
+                    // Issue D fix: use state.currentHostUid only; if no host yet, the first joined player is host
+                    const isHostSender = state.currentHostUid === userId;
                     if (isHostSender && (!state.gameStarted || state.winner) && Object.keys(state.players).length >= 2) {
                         state = this.initializeNewGame(state);
                         this.triggerSound(state, "start");
@@ -1071,62 +1073,8 @@
                     break;
                 }
                 case "play-card": {
-                    // Helper: finalize a card play (shared between normal, jump-in, and auto-play paths)
-                    const playCardLogic = (playingPlayer, playingUserId, cardToPlay) => {
-                        playingPlayer.hand = playingPlayer.hand.filter(c => c.id !== cardToPlay.id);
-                        state.discardPile.push(cardToPlay);
-                        playingPlayer.hasDrawnThisTurn = false;
-                        playingPlayer.lastDrawnCardId = null;
-                        state.turnStartTime = Date.now();
-
-                        if (cardToPlay.type === "wild" || cardToPlay.type === "wild_draw_4") {
-                            state.awaitingColorChoice = playingUserId;
-                            state.lastPlayedWildCard = cardToPlay;
-                            this.triggerSound(state, "play_card");
-                        } else {
-                            state.currentCard = cardToPlay;
-                            this.applyCardEffect(state, cardToPlay);
-
-                            // 7-0 rule: playing a 7 triggers hand swap choice
-                            if (state.houseRules && state.houseRules.sevenZero && cardToPlay.value === "7") {
-                                const otherPlayers = Object.keys(state.players).filter(id => id !== playingUserId);
-                                if (otherPlayers.length > 0) {
-                                    // Check UNO penalty before suspending for swap choice
-                                    if (playingPlayer.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
-                                        if (!playingPlayer.hasCalledUno) {
-                                            this.log(`${playingPlayer.name} did not call UNO on winning play! Drawing 2 cards.`);
-                                            this.drawCardsForPlayer(state, playingUserId, 2);
-                                        }
-                                        playingPlayer.hasCalledUno = false;
-                                    }
-                                    state.awaitingSevenSwapChoice = playingUserId;
-                                    this.triggerSound(state, "play_card");
-                                    return; // Suspend turn — awaiting swap choice
-                                }
-                            }
-
-                            // 7-0 rule: playing a 0 triggers hand rotation
-                            if (state.houseRules && state.houseRules.sevenZero && cardToPlay.value === "0") {
-                                this.rotateHands(state);
-                            }
-
-                            if (playingPlayer.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
-                                if (!playingPlayer.hasCalledUno) {
-                                    this.log(`${playingPlayer.name} did not call UNO on winning play! Drawing 2 cards.`);
-                                    this.drawCardsForPlayer(state, playingUserId, 2);
-                                }
-                                playingPlayer.hasCalledUno = false;
-                            }
-
-                            if (playingPlayer.hand.length === 0) {
-                                this.declareWinner(state, playingUserId);
-                            } else {
-                                this.nextTurn(state, playingUserId);
-                                this.triggerSound(state, "play_card");
-                            }
-                        }
-                    };
-
+                    // Issue E note: awaitingSevenSwapChoice is checked on line below — this prevents
+                    // jump-in during a pending 7-swap, so a second 7 can't overwrite the first swap choice.
                     if (!player || state.winner || state.awaitingColorChoice || state.awaitingSevenSwapChoice) break;
 
                     const cardToPlay = player.hand.find(c => c.id === data.cardId);
@@ -1148,7 +1096,7 @@
                             }
                             // Set this player as current and play the card
                             state.currentPlayerId = userId;
-                            playCardLogic(player, userId, cardToPlay);
+                            this.executeCardPlay(state, player, userId, cardToPlay);
                         } else {
                             this.log("Jump-in not allowed or conditions not met for", userName);
                         }
@@ -1165,66 +1113,13 @@
                     }
 
                     if (this.isValidPlay(cardToPlay, state.currentCard, state.pendingDraw, state.houseRules)) {
-                        playCardLogic(player, userId, cardToPlay);
+                        this.executeCardPlay(state, player, userId, cardToPlay);
                     } else {
                         this.log("Invalid card play attempted by", userName);
                     }
                     break;
                 }
                 case "draw-card": {
-                    // Helper to reuse playCardLogic inside draw-card
-                    const playCardFromDraw = (playingPlayer, playingUserId, cardToPlay) => {
-                        playingPlayer.hand = playingPlayer.hand.filter(c => c.id !== cardToPlay.id);
-                        state.discardPile.push(cardToPlay);
-                        playingPlayer.hasDrawnThisTurn = false;
-                        playingPlayer.lastDrawnCardId = null;
-                        state.turnStartTime = Date.now();
-
-                        if (cardToPlay.type === "wild" || cardToPlay.type === "wild_draw_4") {
-                            state.awaitingColorChoice = playingUserId;
-                            state.lastPlayedWildCard = cardToPlay;
-                            this.triggerSound(state, "play_card");
-                        } else {
-                            state.currentCard = cardToPlay;
-                            this.applyCardEffect(state, cardToPlay);
-
-                            if (state.houseRules && state.houseRules.sevenZero && cardToPlay.value === "7") {
-                                const otherPlayers = Object.keys(state.players).filter(id => id !== playingUserId);
-                                if (otherPlayers.length > 0) {
-                                    if (playingPlayer.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
-                                        if (!playingPlayer.hasCalledUno) {
-                                            this.log(`${playingPlayer.name} did not call UNO on winning play! Drawing 2 cards.`);
-                                            this.drawCardsForPlayer(state, playingUserId, 2);
-                                        }
-                                        playingPlayer.hasCalledUno = false;
-                                    }
-                                    state.awaitingSevenSwapChoice = playingUserId;
-                                    this.triggerSound(state, "play_card");
-                                    return;
-                                }
-                            }
-
-                            if (state.houseRules && state.houseRules.sevenZero && cardToPlay.value === "0") {
-                                this.rotateHands(state);
-                            }
-
-                            if (playingPlayer.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
-                                if (!playingPlayer.hasCalledUno) {
-                                    this.log(`${playingPlayer.name} did not call UNO on winning play! Drawing 2 cards.`);
-                                    this.drawCardsForPlayer(state, playingUserId, 2);
-                                }
-                                playingPlayer.hasCalledUno = false;
-                            }
-
-                            if (playingPlayer.hand.length === 0) {
-                                this.declareWinner(state, playingUserId);
-                            } else {
-                                this.nextTurn(state, playingUserId);
-                                this.triggerSound(state, "play_card");
-                            }
-                        }
-                    };
-
                     if (player && state.currentPlayerId === userId && !state.winner && !state.awaitingColorChoice && !state.awaitingSevenSwapChoice) {
                         if (state.pendingDraw > 0) {
                             this.drawCardsForPlayer(state, userId, state.pendingDraw);
@@ -1233,6 +1128,7 @@
                             this.nextTurn(state, userId);
                             this.triggerSound(state, "draw_card");
                         } else if (state.houseRules && state.houseRules.drawToPlay) {
+                            // Draw-to-Play: keep drawing until a playable card is found
                             let drawnPlayable = null;
                             let drawCount = 0;
                             const maxDraws = 25; // Capped to 25 per turn to prevent total deck draining
@@ -1249,27 +1145,31 @@
                             }
                             state.turnStartTime = Date.now();
                             if (drawnPlayable) {
-                                playCardFromDraw(player, userId, drawnPlayable);
+                                this.executeCardPlay(state, player, userId, drawnPlayable);
                             } else {
+                                // Drew all cards but none were playable — pass turn
                                 player.hasDrawnThisTurn = false;
                                 this.nextTurn(state, userId);
                                 this.triggerSound(state, "draw_card");
                             }
                         } else if (state.houseRules && state.houseRules.forcePlay) {
+                            // Force Play: draw 1 card, auto-play if playable
                             const handSizeBefore = player.hand.length;
                             this.drawCardsForPlayer(state, userId, 1);
                             state.turnStartTime = Date.now();
                             if (player.hand.length > handSizeBefore) {
                                 const drawnCard = player.hand[player.hand.length - 1];
                                 if (this.isValidPlay(drawnCard, state.currentCard, 0, state.houseRules)) {
-                                    playCardFromDraw(player, userId, drawnCard);
+                                    this.executeCardPlay(state, player, userId, drawnCard);
                                 } else {
+                                    // Drawn card is not playable — normal draw behavior
                                     player.lastDrawnCardId = drawnCard.id;
                                     player.hasDrawnThisTurn = true;
                                     this.triggerSound(state, "draw_card");
                                 }
                             }
                         } else {
+                            // Default: draw 1 card, allow play or pass
                             const handSizeBefore = player.hand.length;
                             this.drawCardsForPlayer(state, userId, 1);
                             if (player.hand.length > handSizeBefore) {
@@ -1283,21 +1183,21 @@
                     break;
                 }
                 case "pass-turn":
-                    if (player && state.currentPlayerId === userId && !state.winner && !state.awaitingColorChoice && player.hasDrawnThisTurn) {
-                        player.hasDrawnThisTurn = false; // Reset for next turn
-                        state.turnStartTime = Date.now(); // Reset timer on action
+                    // Issue C fix: also guard against awaitingSevenSwapChoice
+                    if (player && state.currentPlayerId === userId && !state.winner && !state.awaitingColorChoice && !state.awaitingSevenSwapChoice && player.hasDrawnThisTurn) {
+                        player.hasDrawnThisTurn = false;
+                        state.turnStartTime = Date.now();
                         this.nextTurn(state, userId);
-                        this.triggerSound(state, "pass"); // Changed to triggerSound
+                        this.triggerSound(state, "pass");
                     } else {
                         this.log("Invalid pass-turn action by", userName);
                     }
                     break;
                 case "call-uno":
                     // UNO can be called at 2 cards (before playing second-to-last) or 1 card (after playing).
-                    // This is intentional: players need to call UNO before or as they play their second-to-last card.
                     if (player && (player.hand.length === 1 || player.hand.length === 2)) {
                         player.hasCalledUno = true;
-                        this.triggerSound(state, "uno"); // Changed to triggerSound
+                        this.triggerSound(state, "uno");
                     }
                     break;
                 case "choose-wild-color": {
@@ -1306,10 +1206,9 @@
                         state.lastPlayedWildCard.chosenColor = data.chosenColor;
                         state.currentCard = state.lastPlayedWildCard;
                         this.applyCardEffect(state, state.currentCard);
-                        state.turnStartTime = Date.now(); // Reset timer on action
+                        state.turnStartTime = Date.now();
 
                         if (player.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
-                            // Check UNO penalty before declaring winner (player went 1→0 without calling UNO)
                             if (!player.hasCalledUno) {
                                 this.log(`${player.name} did not call UNO on winning play! Drawing 2 cards.`);
                                 this.drawCardsForPlayer(state, userId, 2);
@@ -1321,7 +1220,7 @@
                             this.declareWinner(state, userId);
                         } else {
                             this.nextTurn(state, userId);
-                            this.triggerSound(state, "play_card"); // Changed to triggerSound
+                            this.triggerSound(state, "play_card");
                         }
 
                         state.awaitingColorChoice = null;
@@ -1344,30 +1243,24 @@
                         const tempHand = [...player.hand];
                         player.hand = [...swapTarget.hand];
                         swapTarget.hand = tempHand;
-                        // Reset UNO flags for both players since their hand sizes changed
-                        player.hasCalledUno = false;
-                        swapTarget.hasCalledUno = false;
+
                         state.awaitingSevenSwapChoice = null;
                         state.turnStartTime = Date.now();
 
-                        // Perform UNO check and Win check for BOTH players
+                        // Issue B fix: Only check UNO penalty for the initiator (the one who played the 7).
+                        // The swap target did NOT play a card — they were passively swapped into 0 cards,
+                        // so penalizing them for not calling UNO is incorrect.
                         if (player.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
                             if (!player.hasCalledUno) {
-                                this.log(`${player.name} did not call UNO on winning swap! Drawing 2 cards.`);
+                                this.log(`${player.name} did not call UNO on winning play! Drawing 2 cards.`);
                                 this.drawCardsForPlayer(state, userId, 2);
                             }
-                            player.hasCalledUno = false;
                         }
+                        // Reset UNO flags for both after the check
+                        player.hasCalledUno = false;
+                        swapTarget.hasCalledUno = false;
 
-                        if (swapTarget.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
-                            if (!swapTarget.hasCalledUno) {
-                                this.log(`${swapTarget.name} did not call UNO on winning swap! Drawing 2 cards.`);
-                                this.drawCardsForPlayer(state, data.targetPlayerId, 2);
-                            }
-                            swapTarget.hasCalledUno = false;
-                        }
-
-                        // Check for win after swap (player or target may now have 0 cards)
+                        // Check for win after swap — either player may now have 0 cards
                         if (player.hand.length === 0) {
                             this.declareWinner(state, userId);
                         } else if (swapTarget.hand.length === 0) {
@@ -1406,6 +1299,7 @@
                             state.lastPlayedWildCard.chosenColor = colors[Math.floor(Math.random() * colors.length)];
                             state.currentCard = state.lastPlayedWildCard;
                             this.applyCardEffect(state, state.currentCard);
+                            this.log(`Timed out player ${timedOutPlayerId}'s wild card auto-resolved to ${state.lastPlayedWildCard.chosenColor}. Effect applied.`);
                             state.awaitingColorChoice = null;
                             state.lastPlayedWildCard = null;
                         }
@@ -1573,6 +1467,62 @@
                 this.log(`Player ${winnerPlayer.name} wins the round! Awarded ${roundScore} points (Total: ${winnerPlayer.score}).`);
             }
             this.triggerSound(state, "win");
+        }
+
+        // Shared card-play finalization used by play-card, draw-card (force play / draw-to-play)
+        executeCardPlay(state, playingPlayer, playingUserId, cardToPlay) {
+            playingPlayer.hand = playingPlayer.hand.filter(c => c.id !== cardToPlay.id);
+            state.discardPile.push(cardToPlay);
+            playingPlayer.hasDrawnThisTurn = false;
+            playingPlayer.lastDrawnCardId = null;
+            state.turnStartTime = Date.now();
+
+            if (cardToPlay.type === "wild" || cardToPlay.type === "wild_draw_4") {
+                state.awaitingColorChoice = playingUserId;
+                state.lastPlayedWildCard = cardToPlay;
+                this.triggerSound(state, "play_card");
+            } else {
+                state.currentCard = cardToPlay;
+                this.applyCardEffect(state, cardToPlay);
+
+                // 7-0 rule: playing a 7 triggers hand swap choice
+                if (state.houseRules && state.houseRules.sevenZero && cardToPlay.value === "7") {
+                    const otherPlayers = Object.keys(state.players).filter(id => id !== playingUserId);
+                    if (otherPlayers.length > 0) {
+                        // Check UNO penalty before suspending for swap choice
+                        if (playingPlayer.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
+                            if (!playingPlayer.hasCalledUno) {
+                                this.log(`${playingPlayer.name} did not call UNO on winning play! Drawing 2 cards.`);
+                                this.drawCardsForPlayer(state, playingUserId, 2);
+                            }
+                            playingPlayer.hasCalledUno = false;
+                        }
+                        state.awaitingSevenSwapChoice = playingUserId;
+                        this.triggerSound(state, "play_card");
+                        return; // Suspend turn — awaiting swap choice
+                    }
+                }
+
+                // 7-0 rule: playing a 0 triggers hand rotation
+                if (state.houseRules && state.houseRules.sevenZero && cardToPlay.value === "0") {
+                    this.rotateHands(state);
+                }
+
+                if (playingPlayer.hand.length === 0 && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
+                    if (!playingPlayer.hasCalledUno) {
+                        this.log(`${playingPlayer.name} did not call UNO on winning play! Drawing 2 cards.`);
+                        this.drawCardsForPlayer(state, playingUserId, 2);
+                    }
+                    playingPlayer.hasCalledUno = false;
+                }
+
+                if (playingPlayer.hand.length === 0) {
+                    this.declareWinner(state, playingUserId);
+                } else {
+                    this.nextTurn(state, playingUserId);
+                    this.triggerSound(state, "play_card");
+                }
+            }
         }
 
         isValidPlay(cardToPlay, currentCard, pendingDraw, houseRules) {
