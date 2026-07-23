@@ -1266,7 +1266,9 @@
                         } else if (swapTarget.hand.length === 0) {
                             this.declareWinner(state, data.targetPlayerId);
                         } else {
-                            this.nextTurn(state, userId);
+                            // Pass true for skipUnoCheck so the player who swapped into a 1-card hand
+                            // is given the opportunity to call UNO rather than being auto-penalized immediately.
+                            this.nextTurn(state, userId, true);
                             this.triggerSound(state, "play_card");
                         }
                     } else {
@@ -1519,7 +1521,9 @@
                 if (playingPlayer.hand.length === 0) {
                     this.declareWinner(state, playingUserId);
                 } else {
-                    this.nextTurn(state, playingUserId);
+                    // Skip immediate UNO check on 0-rotation since players just acquired new hands
+                    const isZeroCard = cardToPlay.value === "0";
+                    this.nextTurn(state, playingUserId, isZeroCard);
                     this.triggerSound(state, "play_card");
                 }
             }
@@ -1608,7 +1612,7 @@
             }
         }
 
-        nextTurn(state, actualPreviousPlayerId) {
+        nextTurn(state, actualPreviousPlayerId, skipUnoCheck = false) {
             const playerIds = Object.values(state.players)
                 .sort((a, b) => a.position - b.position)
                 .map(p => p.id);
@@ -1644,14 +1648,15 @@
             state.currentPlayerId = playerIds[nextIndex];
 
             // Apply Uno penalty to previous player if applicable (respects autoUnoPenalty house rule)
-            if (!state.houseRules || state.houseRules.autoUnoPenalty !== false) {
+            // Skip check if previous player just acquired their hand via 7-swap or 0-rotation
+            if (!skipUnoCheck && (!state.houseRules || state.houseRules.autoUnoPenalty !== false)) {
                 if (previousPlayer && previousPlayer.hand.length === 1 && !previousPlayer.hasCalledUno) {
                     this.log(`${previousPlayer.name} did not call UNO! Drawing 2 cards.`);
                     this.drawCardsForPlayer(state, previousPlayerId, 2);
                 }
             }
-            // Reset hasCalledUno for the previous player after checking
-            if (previousPlayer) {
+            // Reset hasCalledUno for the previous player after checking (if not skipping check)
+            if (previousPlayer && !skipUnoCheck) {
                 previousPlayer.hasCalledUno = false;
             }
 
