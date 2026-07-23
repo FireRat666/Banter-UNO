@@ -1139,7 +1139,12 @@
                             cardToPlay.color === state.currentCard.color &&
                             cardToPlay.value === state.currentCard.value &&
                             state.pendingDraw === 0) { // Cannot jump in during a pending draw stack
-                            // Valid jump-in! Set this player as current and play the card
+                            // Valid jump-in! Clear interrupted player's turn draw flags
+                            if (state.players[state.currentPlayerId]) {
+                                state.players[state.currentPlayerId].hasDrawnThisTurn = false;
+                                state.players[state.currentPlayerId].lastDrawnCardId = null;
+                            }
+                            // Set this player as current and play the card
                             state.currentPlayerId = userId;
                             playCardLogic(player, userId, cardToPlay);
                         } else {
