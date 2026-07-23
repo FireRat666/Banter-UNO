@@ -1656,9 +1656,29 @@
             }
 
             // Reset hasDrawnThisTurn for the new current player
-            if (state.players[state.currentPlayerId]) {
-                state.players[state.currentPlayerId].hasDrawnThisTurn = false;
+            const newCurrentPlayer = state.players[state.currentPlayerId];
+            if (newCurrentPlayer) {
+                newCurrentPlayer.hasDrawnThisTurn = false;
             }
+
+            // Auto-resolve forced draw (+2/+4) if the new current player has no valid stackable card to play
+            if (state.pendingDraw > 0 && newCurrentPlayer) {
+                const canStack = (newCurrentPlayer.hand || []).some(card => 
+                    this.isValidPlay(card, state.currentCard, state.pendingDraw, state.houseRules)
+                );
+
+                if (!canStack) {
+                    const drawAmount = state.pendingDraw;
+                    this.log(`${newCurrentPlayer.name} has no valid card to stack on +${drawAmount}. Auto-drawing ${drawAmount} cards and skipping turn.`);
+                    this.drawCardsForPlayer(state, state.currentPlayerId, drawAmount);
+                    state.pendingDraw = 0;
+                    this.triggerSound(state, "draw_card");
+
+                    // Turn is skipped after taking forced draw cards — advance turn to next player
+                    return this.nextTurn(state, state.currentPlayerId);
+                }
+            }
+
             state.turnStartTime = Date.now(); // Start timer for the new current player
         }
 
