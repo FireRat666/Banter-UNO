@@ -701,12 +701,13 @@
                 });
 
                 btn.OnClick(() => {
-                    const currentRules = this.gameState.houseRules || { stacking: true, playAnyAfterDraw: true, autoUnoPenalty: true };
-                    const newValue = !currentRules[ruleKey];
+                    const currentRules = (this.gameState && this.gameState.houseRules) || this.getDefaultState().houseRules;
+                    const currentValue = currentRules[ruleKey] !== undefined ? !!currentRules[ruleKey] : defaultValue;
+                    const newValue = !currentValue;
                     this.sendAction("set-house-rules", { houseRules: { [ruleKey]: newValue } });
                 });
 
-                return { row, label: lbl, btn, ruleKey };
+                return { row, label: lbl, btn, ruleKey, defaultValue };
             };
 
             const toggleStacking = await createToggleRow(settingsContainer, "Draw Stacking (+2/+4)", "stacking", true);
@@ -986,6 +987,13 @@
                 for (const key in defaultState) {
                     if (state[key] === undefined) {
                         state[key] = defaultState[key];
+                    }
+                }
+                if (state.houseRules) {
+                    for (const ruleKey in defaultState.houseRules) {
+                        if (state.houseRules[ruleKey] === undefined) {
+                            state.houseRules[ruleKey] = defaultState.houseRules[ruleKey];
+                        }
                     }
                 }
             }
@@ -1777,7 +1785,7 @@
                 if (showSettings && this.gameState.houseRules) {
                     const rules = this.gameState.houseRules;
                     this.ui.settingsPanel.toggles.forEach(toggle => {
-                        const isOn = rules[toggle.ruleKey] !== false;
+                        const isOn = rules[toggle.ruleKey] !== undefined ? !!rules[toggle.ruleKey] : toggle.defaultValue;
                         toggle.btn.text = isOn ? "ON" : "OFF";
                         toggle.btn.SetStyles({
                             backgroundColor: isOn ? '#4CAF50' : '#F44336'
